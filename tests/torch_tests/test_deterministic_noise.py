@@ -334,7 +334,8 @@ class TestSeedManagement:
             member_id=0,
             epoch=0
         )
-        assert pert is not None
+        assert pert is not None, \
+            "Strategy with custom generator should produce a valid perturbation"
 
     def test_different_seeds_produce_different_noise(self, simple_linear, device):
         """
@@ -521,8 +522,12 @@ class TestKeyFolding:
             
             # Can't directly compare since shapes differ
             # Just verify they're both valid and non-zero
-            assert pert1.as_matrix().abs().sum() > 0
-            assert pert2.as_matrix().abs().sum() > 0
+            pert1_norm = pert1.as_matrix().abs().sum().item()
+            pert2_norm = pert2.as_matrix().abs().sum().item()
+            assert pert1_norm > 0, \
+                f"Perturbation 1 should be non-zero, got sum of abs = {pert1_norm}"
+            assert pert2_norm > 0, \
+                f"Perturbation 2 should be non-zero, got sum of abs = {pert2_norm}"
 
 
 # ============================================================================
@@ -828,8 +833,10 @@ class TestNoiseDeterminismEdgeCases:
             epoch=0  # Explicitly epoch 0
         )
         
-        assert pert is not None
-        assert torch.isfinite(pert.as_matrix()).all()
+        assert pert is not None, \
+            "epoch=0 should be a valid input producing a perturbation"
+        assert torch.isfinite(pert.as_matrix()).all(), \
+            "epoch=0 perturbation should contain only finite values"
 
     def test_member_id_zero_is_valid(self, simple_linear, eggroll_config, device):
         """
@@ -851,5 +858,7 @@ class TestNoiseDeterminismEdgeCases:
             epoch=0
         )
         
-        assert pert is not None
-        assert torch.isfinite(pert.as_matrix()).all()
+        assert pert is not None, \
+            "member_id=0 should be a valid input producing a perturbation"
+        assert torch.isfinite(pert.as_matrix()).all(), \
+            "member_id=0 perturbation should contain only finite values"

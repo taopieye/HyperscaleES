@@ -530,7 +530,8 @@ class TestAntitheticPopulationSize:
             epoch=0
         )
         
-        assert len(perturbations) == 2
+        assert len(perturbations) == 2, \
+            f"Minimum antithetic population should be 2 (one +/- pair), got {len(perturbations)}"
         
         # They should be exact negatives
         pert_0 = perturbations[0].as_matrix()
@@ -571,12 +572,18 @@ class TestAntitheticIndexMapping:
         strategy.setup(model)
         
         # Test partner mapping
-        assert strategy.get_antithetic_partner(0) == 1
-        assert strategy.get_antithetic_partner(1) == 0
-        assert strategy.get_antithetic_partner(4) == 5
-        assert strategy.get_antithetic_partner(5) == 4
-        assert strategy.get_antithetic_partner(10) == 11
-        assert strategy.get_antithetic_partner(11) == 10
+        assert strategy.get_antithetic_partner(0) == 1, \
+            f"Partner of member 0 should be 1, got {strategy.get_antithetic_partner(0)}"
+        assert strategy.get_antithetic_partner(1) == 0, \
+            f"Partner of member 1 should be 0, got {strategy.get_antithetic_partner(1)}"
+        assert strategy.get_antithetic_partner(4) == 5, \
+            f"Partner of member 4 should be 5, got {strategy.get_antithetic_partner(4)}"
+        assert strategy.get_antithetic_partner(5) == 4, \
+            f"Partner of member 5 should be 4, got {strategy.get_antithetic_partner(5)}"
+        assert strategy.get_antithetic_partner(10) == 11, \
+            f"Partner of member 10 should be 11, got {strategy.get_antithetic_partner(10)}"
+        assert strategy.get_antithetic_partner(11) == 10, \
+            f"Partner of member 11 should be 10, got {strategy.get_antithetic_partner(11)}"
 
     def test_is_positive_perturbation(self, eggroll_config, device):
         """
@@ -602,12 +609,18 @@ class TestAntitheticIndexMapping:
         strategy.setup(model)
         
         # Even indices are positive, odd are negative
-        assert strategy.is_positive_perturbation(0) == True
-        assert strategy.is_positive_perturbation(1) == False
-        assert strategy.is_positive_perturbation(2) == True
-        assert strategy.is_positive_perturbation(3) == False
-        assert strategy.is_positive_perturbation(100) == True
-        assert strategy.is_positive_perturbation(101) == False
+        assert strategy.is_positive_perturbation(0) == True, \
+            f"Member 0 (even) should be positive perturbation, got {strategy.is_positive_perturbation(0)}"
+        assert strategy.is_positive_perturbation(1) == False, \
+            f"Member 1 (odd) should be negative perturbation, got {strategy.is_positive_perturbation(1)}"
+        assert strategy.is_positive_perturbation(2) == True, \
+            f"Member 2 (even) should be positive perturbation, got {strategy.is_positive_perturbation(2)}"
+        assert strategy.is_positive_perturbation(3) == False, \
+            f"Member 3 (odd) should be negative perturbation, got {strategy.is_positive_perturbation(3)}"
+        assert strategy.is_positive_perturbation(100) == True, \
+            f"Member 100 (even) should be positive perturbation, got {strategy.is_positive_perturbation(100)}"
+        assert strategy.is_positive_perturbation(101) == False, \
+            f"Member 101 (odd) should be negative perturbation, got {strategy.is_positive_perturbation(101)}"
 
 
 # ============================================================================

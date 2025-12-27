@@ -301,11 +301,14 @@ class TestStrategyInterface:
         strategy.setup(simple_mlp)
         
         # Strategy should have reference to model
-        assert strategy.model is simple_mlp
+        assert strategy.model is simple_mlp, \
+            f"strategy.model should be same object as passed model, got {type(strategy.model)} vs {type(simple_mlp)}"
         
         # Should have discovered parameters
         params = list(strategy.parameters())
-        assert len(params) > 0
+        expected_param_count = sum(1 for _ in simple_mlp.parameters())
+        assert len(params) > 0, \
+            f"Strategy should discover parameters from model (expected {expected_param_count})"
 
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
     def test_perturb_returns_context_manager(self, strategy_type, config, simple_mlp):
@@ -331,14 +334,18 @@ class TestStrategyInterface:
         # perturb should return context manager
         with strategy.perturb(population_size=8, epoch=0) as pop:
             # Pop should have batched_forward method
-            assert hasattr(pop, "batched_forward")
-            assert hasattr(pop, "population_size")
-            assert pop.population_size == 8
+            assert hasattr(pop, "batched_forward"), \
+                "Perturbation context should have 'batched_forward' method"
+            assert hasattr(pop, "population_size"), \
+                "Perturbation context should have 'population_size' attribute"
+            assert pop.population_size == 8, \
+                f"pop.population_size should match requested size, got {pop.population_size}"
             
             # Can call batched_forward
             x = torch.randn(8, 8, device=device)
             outputs = pop.batched_forward(simple_mlp, x)
-            assert outputs.shape[0] == 8
+            assert outputs.shape[0] == 8, \
+                f"batched_forward output batch dim should match population_size (8), got {outputs.shape[0]}"
 
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
     def test_step_updates_parameters(self, strategy_type, config, simple_mlp, device):
@@ -431,7 +438,8 @@ class TestStrategyInterface:
         
         # New strategy state should match
         new_state = new_strategy.state_dict()
-        assert state.keys() == new_state.keys()
+        assert state.keys() == new_state.keys(), \
+            f"State dict keys mismatch: {state.keys()} vs {new_state.keys()}"
 
 
 # ============================================================================
@@ -624,7 +632,8 @@ class TestStrategyConfiguration:
         from hyperscalees.torch import EggrollStrategy
         
         strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
-        assert strategy.sigma == 0.1
+        assert strategy.sigma == 0.1, \
+            f"sigma property should return configured value (0.1), got {strategy.sigma}"
 
     def test_lr_is_readable(self):
         """
@@ -637,7 +646,8 @@ class TestStrategyConfiguration:
         from hyperscalees.torch import EggrollStrategy
         
         strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
-        assert strategy.lr == 0.01
+        assert strategy.lr == 0.01, \
+            f"lr property should return configured value (0.01), got {strategy.lr}"
 
     def test_sigma_can_be_updated(self):
         """
@@ -649,11 +659,13 @@ class TestStrategyConfiguration:
         from hyperscalees.torch import EggrollStrategy
         
         strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
-        assert strategy.sigma == 0.1
+        assert strategy.sigma == 0.1, \
+            f"Initial sigma should be 0.1, got {strategy.sigma}"
         
         # Update sigma
         strategy.sigma = 0.05
-        assert strategy.sigma == 0.05
+        assert strategy.sigma == 0.05, \
+            f"After setting sigma=0.05, got {strategy.sigma}"
 
     def test_lr_can_be_updated(self):
         """
@@ -665,11 +677,13 @@ class TestStrategyConfiguration:
         from hyperscalees.torch import EggrollStrategy
         
         strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
-        assert strategy.lr == 0.01
+        assert strategy.lr == 0.01, \
+            f"Initial lr should be 0.01, got {strategy.lr}"
         
         # Update learning rate
         strategy.lr = 0.005
-        assert strategy.lr == 0.005
+        assert strategy.lr == 0.005, \
+            f"After setting lr=0.005, got {strategy.lr}"
 
     def test_from_config_classmethod(self):
         """

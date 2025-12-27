@@ -113,7 +113,8 @@ class TestLowRankPerturbationStructure:
         # Verify rank
         rank = compute_matrix_rank(full_matrix)
         assert rank <= eggroll_config.rank, \
-            f"Perturbation rank {rank} exceeds configured rank {eggroll_config.rank}"
+            f"Perturbation matrix rank ({rank}) exceeds configured rank limit ({eggroll_config.rank}). " \
+            f"Matrix shape: {full_matrix.shape}"
 
     @pytest.mark.parametrize("rank", [1, 2, 4, 8, 16])
     def test_rank_parameter_controls_perturbation_rank(
@@ -313,10 +314,13 @@ class TestStorageEfficiency:
         expected_low = r * (m + n)  # 4 * 384 = 1536
         expected_ratio = expected_full / expected_low  # ~21x
         
-        assert stats["full_rank_elements"] == expected_full
-        assert stats["low_rank_elements"] == expected_low
+        assert stats["full_rank_elements"] == expected_full, \
+            f"Full rank storage should be {expected_full} elements (m*n), got {stats['full_rank_elements']}"
+        assert stats["low_rank_elements"] == expected_low, \
+            f"Low rank storage should be {expected_low} elements (r*(m+n)), got {stats['low_rank_elements']}"
         assert stats["savings_ratio"] > 10, \
-            f"Expected >10x savings, got {stats['savings_ratio']:.1f}x"
+            f"Expected >10x storage savings for rank {r} on {m}x{n} matrix, got only {stats['savings_ratio']:.1f}x. " \
+            f"Full: {stats['full_rank_elements']}, Low-rank: {stats['low_rank_elements']}"
 
     def test_memory_usage_scales_with_rank(self, device):
         """
@@ -434,8 +438,9 @@ class TestSigmaScaling:
         )
         
         full_matrix = perturbation.as_matrix()
-        assert full_matrix.abs().max() == 0, \
-            f"sigma=0 should produce zero perturbation, got max={full_matrix.abs().max():.6f}"
+        max_val = full_matrix.abs().max().item()
+        assert max_val == 0, \
+            f"sigma=0 should produce all-zero perturbation, got max absolute value {max_val:.2e}"
 
     def test_perturbation_normalized_by_sqrt_rank(self, device):
         """
@@ -494,7 +499,7 @@ class TestBatchPerturbation:
                 epoch=0
             )
             
-            assert len(perturbations) == 64
+            assert len(perturbations) == 64  # Should return one perturbation per population member
             # Or as batched tensors:
             # A_batch: (64, m, r), B_batch: (64, n, r)
         """

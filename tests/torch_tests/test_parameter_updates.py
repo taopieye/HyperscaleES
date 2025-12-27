@@ -240,7 +240,8 @@ class TestLearningRate:
         
         # Larger LR -> larger update
         assert deltas[2] > deltas[1] > deltas[0], \
-            f"Update should scale with lr: {deltas}"
+            f"Update magnitude should scale with lr: lr=[0.001,0.01,0.1] -> deltas={deltas}, " \
+            f"but got deltas[2]({deltas[2]:.4f}) <= deltas[1]({deltas[1]:.4f}) <= deltas[0]({deltas[0]:.4f})"
 
     def test_zero_lr_produces_no_update(self, simple_mlp, eggroll_config):
         """
@@ -504,7 +505,8 @@ class TestOptimizerIntegration:
         
         # Optimizer state should exist
         state = strategy.optimizer.state
-        assert len(state) > 0, "Adam state should be populated after step"
+        assert len(state) > 0, \
+            f"Adam optimizer state should be populated after step(), got {len(state)} param groups"
         
         # Second step
         with strategy.perturb(population_size=population_size, epoch=1) as pop:
@@ -996,7 +998,8 @@ class TestUpdateStateConsistency:
         strategy = EggrollStrategy(**eggroll_config.__dict__)
         strategy.setup(simple_mlp)
         
-        assert strategy.epoch == 0
+        assert strategy.epoch == 0, \
+            f"Before any step(), epoch should be 0, got {strategy.epoch}"
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
@@ -1006,7 +1009,8 @@ class TestUpdateStateConsistency:
         fitnesses = make_fitnesses(population_size, device=device)
         strategy.step(fitnesses)
         
-        assert strategy.epoch == 1
+        assert strategy.epoch == 1, \
+            f"After one step(), epoch should be 1, got {strategy.epoch}"
 
     def test_step_count_tracked(self, simple_mlp, eggroll_config):
         """
@@ -1026,7 +1030,8 @@ class TestUpdateStateConsistency:
         strategy = EggrollStrategy(**eggroll_config.__dict__)
         strategy.setup(simple_mlp)
         
-        assert strategy.total_steps == 0
+        assert strategy.total_steps == 0, \
+            f"Before any step(), total_steps should be 0, got {strategy.total_steps}"
         
         for epoch in range(5):
             population_size = 8
@@ -1037,4 +1042,5 @@ class TestUpdateStateConsistency:
             fitnesses = make_fitnesses(population_size, device=device)
             strategy.step(fitnesses)
         
-        assert strategy.total_steps == 5
+        assert strategy.total_steps == 5, \
+            f"After 5 step() calls, total_steps should be 5, got {strategy.total_steps}"

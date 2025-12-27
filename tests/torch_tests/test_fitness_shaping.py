@@ -50,7 +50,9 @@ class TestFitnessNormalization:
         normalized = strategy.normalize_fitnesses(fitnesses)
         
         # Mean should be approximately zero
-        assert normalized.mean().abs() < 1e-6, f"Expected mean ~0, got {normalized.mean()}"
+        mean_val = normalized.mean().item()
+        assert abs(mean_val) < 1e-6, \
+            f"Normalized fitness mean should be ~0, got {mean_val:.2e} (input mean was {fitnesses.mean():.2f})"
 
     def test_normalized_scores_have_unit_variance(self, eggroll_config):
         """
@@ -72,8 +74,9 @@ class TestFitnessNormalization:
         
         # Variance should be approximately 1
         # Note: using unbiased=False for population variance like in normalization
-        var = normalized.var(unbiased=False)
-        assert abs(var - 1.0) < 0.1, f"Expected variance ~1, got {var}"
+        var = normalized.var(unbiased=False).item()
+        assert abs(var - 1.0) < 0.1, \
+            f"Normalized fitness variance should be ~1.0, got {var:.4f} (deviation: {abs(var - 1.0):.4f})"
 
     def test_normalization_preserves_ordering(self, eggroll_config):
         """
@@ -160,10 +163,13 @@ class TestFitnessEdgeCases:
         normalized = strategy.normalize_fitnesses(fitnesses)
         
         # Should not produce NaN or Inf
-        assert torch.isfinite(normalized).all(), "Got non-finite values"
+        assert torch.isfinite(normalized).all(), \
+            f"Constant fitness values produced NaN/Inf. Got: {normalized}"
         
         # All zeros since there's no difference
-        assert normalized.abs().max() < 1e-6
+        max_val = normalized.abs().max().item()
+        assert max_val < 1e-6, \
+            f"Constant fitness values should normalize to zeros, got max={max_val:.2e}"
 
     def test_very_small_variance_handled(self, eggroll_config):
         """
@@ -207,10 +213,13 @@ class TestFitnessEdgeCases:
         normalized = strategy.normalize_fitnesses(fitnesses)
         
         # Should not overflow
-        assert torch.isfinite(normalized).all(), "Got non-finite values with large inputs"
+        assert torch.isfinite(normalized).all(), \
+            f"Large fitness values (up to {fitnesses.max():.0e}) caused overflow. Got: {normalized}"
         
         # Should still have zero mean
-        assert normalized.mean().abs() < 1e-5
+        mean_val = normalized.mean().item()
+        assert abs(mean_val) < 1e-5, \
+            f"Large fitness values should still normalize to zero mean, got {mean_val:.2e}"
 
     def test_negative_fitness_values_handled(self, eggroll_config):
         """
@@ -232,8 +241,11 @@ class TestFitnessEdgeCases:
         fitnesses = torch.tensor([-10.0, -5.0, 0.0, 5.0, 10.0])
         normalized = strategy.normalize_fitnesses(fitnesses)
         
-        assert torch.isfinite(normalized).all()
-        assert normalized.mean().abs() < 1e-6
+        assert torch.isfinite(normalized).all(), \
+            f"Mixed positive/negative fitness values produced NaN/Inf. Got: {normalized}"
+        mean_val = normalized.mean().item()
+        assert abs(mean_val) < 1e-6, \
+            f"Mixed pos/neg fitness values should have zero mean after normalization, got {mean_val:.2e}"
 
     def test_single_fitness_value_handled(self, eggroll_config):
         """

@@ -43,17 +43,21 @@ console = Console()
 # ============================================================================
 
 class CartPolePolicy(nn.Module):
-    """Simple MLP policy for CartPole."""
+    """MLP policy for CartPole (matches paper's architecture)."""
     
-    def __init__(self, hidden_size: int = 32):
+    def __init__(self, hidden_size: int = 256, n_layers: int = 3):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(4, hidden_size),
-            nn.Tanh(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.Tanh(),
-            nn.Linear(hidden_size, 2),
-        )
+        
+        layers = []
+        in_size = 4  # CartPole observation size
+        
+        for _ in range(n_layers):
+            layers.append(nn.Linear(in_size, hidden_size))
+            layers.append(nn.Tanh())
+            in_size = hidden_size
+        
+        layers.append(nn.Linear(hidden_size, 2))  # 2 actions
+        self.net = nn.Sequential(*layers)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
@@ -195,6 +199,7 @@ def run_benchmark(
     population_size: int,
     n_generations: int,
     hidden_size: int,
+    n_layers: int,
     device: torch.device,
     seed: int,
     progress: Progress,
@@ -208,9 +213,13 @@ def run_benchmark(
     def make_env():
         return gym.make("CartPole-v1")
     
-    # Create model
+    # Create model (paper uses 256x3 architecture)
     torch.manual_seed(seed)
-    model = CartPolePolicy(hidden_size=hidden_size).to(device)
+    model = CartPolePolicy(hidden_size=hidden_size, n_layers=n_layers).to(device)
+    
+    # Log model size
+    n_params = sum(p.numel() for p in model.parameters())
+    console.print(f"  [dim]{strategy_name}: {n_params:,} parameters[/dim]")
     
     # Create strategy
     strategy = strategy_class(**strategy_kwargs)
@@ -353,15 +362,22 @@ def print_config(args: argparse.Namespace, device: torch.device):
     
     config_table.add_row("Environment", "CartPole-v1")
     config_table.add_row("Device", str(device))
-    config_table.add_row("Population", str(args.population))
     config_table.add_row("Generations", str(args.generations))
-    config_table.add_row("Hidden Size", str(args.hidden_size))
-    config_table.add_row("Sigma", str(args.sigma))
-    config_table.add_row("Learning Rate", str(args.lr))
-    config_table.add_row("EGGROLL Rank", str(args.rank))
+    config_table.add_row("Architecture", f"{args.hidden_size}x{args.n_layers} layers")
     config_table.add_row("Seed", str(args.seed))
+    config_table.add_row("", "")
+    config_table.add_row("[cyan]EGGROLL[/cyan]", "")
+    config_table.add_row("  Population", str(args.eggroll_pop))
+    config_table.add_row("  Sigma", str(args.eggroll_sigma))
+    config_table.add_row("  LR", str(args.eggroll_lr))
+    config_table.add_row("  Rank", str(args.rank))
+    config_table.add_row("", "")
+    config_table.add_row("[green]OpenES[/green]", "")
+    config_table.add_row("  Population", str(args.openes_pop))
+    config_table.add_row("  Sigma", str(args.openes_sigma))
+    config_table.add_row("  LR", str(args.openes_lr))
     
-    console.print(Panel(config_table, title="⚙️  Configuration", box=box.ROUNDED))
+    console.print(Panel(config_table, title="⚙️  Configuration (Paper Defaults)", box=box.ROUNDED))
 
 
 # ============================================================================
@@ -374,14 +390,25 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     
-    parser.add_argument("--population", "-p", type=int, default=32, help="Population size")
+    # General args
     parser.add_argument("--generations", "-g", type=int, default=30, help="Number of generations")
-    parser.add_argument("--hidden-size", type=int, default=32, help="Hidden layer size")
-    parser.add_argument("--sigma", type=float, default=0.1, help="Noise standard deviation")
-    parser.add_argument("--lr", type=float, default=0.05, help="Learning rate")
-    parser.add_argument("--rank", type=int, default=4, help="EGGROLL rank")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--no-antithetic", action="store_true", help="Disable antithetic sampling")
+    
+    # Use paper's hyperparameters as defaults
+    # EGGROLL-specific (can be overridden)
+    parser.add_argument("--eggroll-pop", type=int, default=2048, help="EGGROLL population size")
+    parser.add_argument("--eggroll-sigma", type=float, default=0.2, help="EGGROLL sigma")
+    parser.add_argument("--eggroll-lr", type=float, default=0.1, help="EGGROLL learning rate")
+    parser.add_argument("--rank", type=int, default=4, help="EGGROLL rank")
+    
+    # OpenES-specific (can be overridden)
+    parser.add_argument("--openes-pop", type=int, default=512, help="OpenES population size")
+    parser.add_argument("--openes-sigma", type=float, default=0.5, help="OpenES sigma")
+    parser.add_argument("--openes-lr", type=float, default=0.1, help="OpenES learning rate")
+    
+    # Shared architecture (paper uses 256x3 layers)
+    parser.add_argument("--hidden-size", type=int, default=256, help="Hidden layer size")
+    parser.add_argument("--n-layers", type=int, default=3, help="Number of hidden layers")
     
     args = parser.parse_args()
     
@@ -409,28 +436,30 @@ def main():
         console.print("Make sure hyperscalees is installed: [cyan]uv sync[/cyan]")
         return 1
     
-    # Define strategies to benchmark
+    # Define strategies to benchmark (using paper's hyperparameters)
     strategies = [
         (
-            "EGGROLL (rank={})".format(args.rank),
+            f"EGGROLL (pop={args.eggroll_pop}, rank={args.rank})",
             EggrollStrategy,
             {
-                "sigma": args.sigma,
-                "lr": args.lr,
+                "sigma": args.eggroll_sigma,
+                "lr": args.eggroll_lr,
                 "rank": args.rank,
                 "seed": args.seed,
-                "antithetic": not args.no_antithetic,
+                "antithetic": True,
             },
+            args.eggroll_pop,
         ),
         (
-            "OpenES (full-rank)",
+            f"OpenES (pop={args.openes_pop})",
             OpenESStrategy,
             {
-                "sigma": args.sigma,
-                "lr": args.lr,
+                "sigma": args.openes_sigma,
+                "lr": args.openes_lr,
                 "seed": args.seed,
-                "antithetic": not args.no_antithetic,
+                "antithetic": True,
             },
+            args.openes_pop,
         ),
     ]
     
@@ -448,16 +477,17 @@ def main():
         console=console,
     ) as progress:
         
-        for name, cls, kwargs in strategies:
+        for name, cls, kwargs, pop_size in strategies:
             task_id = progress.add_task(f"[cyan]{name}[/]", total=args.generations)
             
             result = run_benchmark(
                 strategy_name=name,
                 strategy_class=cls,
                 strategy_kwargs=kwargs,
-                population_size=args.population,
+                population_size=pop_size,
                 n_generations=args.generations,
                 hidden_size=args.hidden_size,
+                n_layers=args.n_layers,
                 device=device,
                 seed=args.seed,
                 progress=progress,

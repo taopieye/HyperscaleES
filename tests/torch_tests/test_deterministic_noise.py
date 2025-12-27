@@ -550,9 +550,8 @@ class TestNoiseRegeneration:
             
             # Forward pass - perturbations generated
             with strategy.perturb(population_size=64, epoch=0) as pop:
-                for member_id in pop.iterate():
-                    output = model(x)
-                    # Perturbations NOT stored
+                outputs = pop.batched_forward(model, x_batch)
+                # Perturbations NOT stored
             
             # Update phase - perturbations regenerated
             strategy.step(fitnesses)  # Regenerates internally

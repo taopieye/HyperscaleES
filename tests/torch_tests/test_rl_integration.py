@@ -320,9 +320,9 @@ class TestSequentialEvaluation:
     - Prototyping before implementing batched evaluation
     """
 
-    def test_sequential_iteration(self, simple_mlp, eggroll_config, device):
+    def test_batched_population_evaluation(self, simple_mlp, eggroll_config, device):
         """
-        Should be able to iterate through population sequentially.
+        Should be able to evaluate entire population in one batched call.
         """
         from hyperscalees.torch import EggrollStrategy
         
@@ -330,46 +330,43 @@ class TestSequentialEvaluation:
         strategy.setup(simple_mlp)
         
         population_size = 8
-        x = torch.randn(1, 8, device=device)
-        outputs = []
+        # Each population member gets the same input
+        x = torch.randn(1, 8, device=device).expand(population_size, -1)
         
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            for member_id in pop.iterate():
-                output = simple_mlp(x)
-                outputs.append(output.clone())
+            outputs = pop.batched_forward(simple_mlp, x)
         
-        assert len(outputs) == population_size, \
-            f"Should collect {population_size} outputs, got {len(outputs)}"
+        assert outputs.shape[0] == population_size, \
+            f"Should get {population_size} outputs, got {outputs.shape[0]}"
         
         # Different members should give different outputs
         for i in range(population_size - 1):
             assert not torch.allclose(outputs[i], outputs[i + 1], atol=1e-6), \
-                f"Sequential outputs {i} and {i+1} should differ"
+                f"Batched outputs {i} and {i+1} should differ (different perturbations)"
 
-    def test_perturbation_consistent_within_member(self, simple_mlp, eggroll_config, device):
+    def test_perturbation_deterministic_per_member(self, simple_mlp, eggroll_config, device):
         """
-        Same perturbation should be used for multiple forward passes within a member.
+        Same member_id should get same perturbation across batched_forward calls.
         """
         from hyperscalees.torch import EggrollStrategy
         
         strategy = EggrollStrategy(**eggroll_config.__dict__)
         strategy.setup(simple_mlp)
         
-        x = torch.randn(1, 8, device=device)
+        population_size = 8
+        x = torch.randn(1, 8, device=device).expand(population_size, -1)
         
-        with strategy.perturb(population_size=8, epoch=0) as pop:
-            # Multiple forward passes for member 0
-            for member_id in pop.iterate():
-                output1 = simple_mlp(x)
-                output2 = simple_mlp(x)
-                output3 = simple_mlp(x)
-                
-                # All should be identical for the same member
-                assert torch.equal(output1, output2), \
-                    f"Multiple passes for member {member_id} should be identical"
-                assert torch.equal(output2, output3), \
-                    f"Multiple passes for member {member_id} should be identical"
-                break  # Just test first member
+        # Multiple batched_forward calls in same context should give same results
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            output1 = pop.batched_forward(simple_mlp, x)
+            output2 = pop.batched_forward(simple_mlp, x)
+            output3 = pop.batched_forward(simple_mlp, x)
+        
+        # All calls should be identical (same perturbations for same member_ids)
+        assert torch.allclose(output1, output2, atol=1e-6), \
+            "Multiple batched_forward calls should be identical"
+        assert torch.allclose(output2, output3, atol=1e-6), \
+            "Multiple batched_forward calls should be identical"
 
 
 # ============================================================================

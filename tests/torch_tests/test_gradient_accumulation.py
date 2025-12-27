@@ -499,11 +499,16 @@ class TestUpdateQuality:
         
         population_size = 32
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            fitnesses = []
-            for _ in pop.iterate():
-                output = model(x)
-                fitnesses.append(fitness_fn(output).item())
-            fitnesses = torch.tensor(fitnesses, device=device)
+            # Expand input for all population members
+            x_batch = x.unsqueeze(0).expand(population_size, -1, -1).reshape(population_size * x.shape[0], x.shape[1])
+            member_ids = torch.arange(population_size, device=device).repeat_interleave(x.shape[0])
+            outputs_flat = pop.batched_forward(model, x_batch, member_ids=member_ids)
+            outputs = outputs_flat.reshape(population_size, x.shape[0], -1)
+            # Compute fitness for each member
+            fitnesses = torch.tensor(
+                [fitness_fn(outputs[i]).item() for i in range(population_size)],
+                device=device
+            )
         
         initial_weight = model.weight.clone()
         initial_fitness = fitness_fn(model(x)).item()
@@ -595,13 +600,14 @@ class TestUpdateQuality:
         population_size = 256  # Large population for good estimate
         
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            fitnesses = []
-            for _ in pop.iterate():
-                output = model(x)
-                # Negative loss as fitness (want to maximize)
-                fitness = -((output - target) ** 2).sum().item()
-                fitnesses.append(fitness)
-            fitnesses = torch.tensor(fitnesses, device=device)
+            # Expand input for all population members
+            x_batch = x.unsqueeze(0).expand(population_size, -1, -1).reshape(population_size * x.shape[0], x.shape[1])
+            member_ids = torch.arange(population_size, device=device).repeat_interleave(x.shape[0])
+            outputs_flat = pop.batched_forward(model, x_batch, member_ids=member_ids)
+            outputs = outputs_flat.reshape(population_size, x.shape[0], -1)
+            # Compute negative loss as fitness for each member
+            target_expanded = target.unsqueeze(0).expand(population_size, -1, -1)
+            fitnesses = -((outputs - target_expanded) ** 2).sum(dim=(1, 2))
         
         before = model.weight.clone()
         strategy.step(fitnesses)

@@ -713,11 +713,9 @@ class TestMultiStepUpdates:
             
             for epoch in range(50):
                 with strategy.perturb(64, epoch) as pop:
-                    fitnesses = []
-                    for _ in pop.iterate():
-                        output = model(x)
-                        fitnesses.append(fitness_fn(output).mean())
-                    fitnesses = torch.tensor(fitnesses)
+                    x_batch = x.expand(64, -1)
+                    outputs = pop.batched_forward(model, x_batch)
+                    fitnesses = torch.stack([fitness_fn(outputs[i]) for i in range(64)])
                 strategy.step(fitnesses)
             
             final_fitness = fitness_fn(model(x)).mean()
@@ -747,14 +745,17 @@ class TestMultiStepUpdates:
         
         initial_fitness = fitness_fn(model(x)).item()
         
+        population_size = 32
         for epoch in range(50):
-            population_size = 32
             with strategy.perturb(population_size=population_size, epoch=epoch) as pop:
-                fitnesses = []
-                for _ in pop.iterate():
-                    output = model(x)
-                    fitnesses.append(fitness_fn(output).item())
-                fitnesses = torch.tensor(fitnesses, device=device)
+                # Expand input for all population members
+                x_batch = x.expand(population_size, -1)
+                outputs = pop.batched_forward(model, x_batch)
+                # Compute fitness for each member
+                fitnesses = torch.tensor(
+                    [fitness_fn(outputs[i:i+1]).item() for i in range(population_size)],
+                    device=device
+                )
             strategy.step(fitnesses)
         
         final_fitness = fitness_fn(model(x)).item()

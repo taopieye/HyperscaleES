@@ -254,14 +254,10 @@ class TestAsyncEvaluation:
         Should support async fitness collection for better GPU utilization.
         
         TARGET API:
-            # Non-blocking fitness collection
-            with strategy.perturb_async(population_size=64, epoch=0) as pop:
-                futures = []
-                for member_id in pop.iterate():
-                    future = pop.submit_evaluation(model, x)
-                    futures.append(future)
-                
-                fitnesses = torch.tensor([f.result() for f in futures])
+            # Batched evaluation (preferred)
+            with strategy.perturb(population_size=64, epoch=0) as pop:
+                outputs = pop.batched_forward(model, x_batch)
+                fitnesses = compute_fitnesses(outputs)
             
             strategy.step(fitnesses)
         """

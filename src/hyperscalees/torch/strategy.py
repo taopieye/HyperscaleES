@@ -804,14 +804,7 @@ class EggrollStrategy(BaseStrategy):
                 if bias is not None:
                     base_output = base_output + bias
                 
-                # Compute perturbation output for each batch element
-                # We need to apply different perturbations based on member_ids
-                
-                # Get all unique perturbations needed
-                unique_members = torch.unique(member_ids)
-                
-                # Pre-compute perturbation factors for all unique members
-                perturbations = {}
+                # Find the parameter name for this weight
                 param_name = None
                 for n, p in model.named_parameters():
                     if p is W:
@@ -821,6 +814,21 @@ class EggrollStrategy(BaseStrategy):
                 if param_name is None:
                     # Fallback for modules not in direct named_parameters
                     param_name = name + ".weight"
+                
+                # Check if this parameter should be evolved
+                if not self._should_evolve_param(param_name, W):
+                    # Skip perturbation for frozen/excluded parameters
+                    current_input = base_output
+                    continue
+                
+                # Compute perturbation output for each batch element
+                # We need to apply different perturbations based on member_ids
+                
+                # Get all unique perturbations needed
+                unique_members = torch.unique(member_ids)
+                
+                # Pre-compute perturbation factors for all unique members
+                perturbations = {}
                 
                 for m in unique_members.tolist():
                     pert = self._sample_perturbation(W, int(m), epoch, param_name)
@@ -1102,8 +1110,7 @@ class OpenESStrategy(BaseStrategy):
                 if bias is not None:
                     base_output = base_output + bias
                 
-                unique_members = torch.unique(member_ids)
-                
+                # Find the parameter name for this weight
                 param_name = None
                 for n, p in model.named_parameters():
                     if p is W:
@@ -1111,6 +1118,14 @@ class OpenESStrategy(BaseStrategy):
                         break
                 if param_name is None:
                     param_name = name + ".weight"
+                
+                # Check if this parameter should be evolved
+                if not self._should_evolve_param(param_name, W):
+                    # Skip perturbation for frozen/excluded parameters
+                    current_input = base_output
+                    continue
+                
+                unique_members = torch.unique(member_ids)
                 
                 perturbations = {}
                 for m in unique_members.tolist():

@@ -383,3 +383,105 @@ class TestModelSerialization:
         has_seed_info = "seed" in state or "generator_state" in state
         assert has_seed_info, \
             f"state_dict should contain 'seed' or 'generator_state', got keys: {list(state.keys())}"
+
+
+# ============================================================================
+# LowRankLinear Layer Tests
+# ============================================================================
+
+class TestLowRankLinear:
+    """Test the LowRankLinear layer for ES-optimized models."""
+
+    def test_lowrank_linear_basic_usage(self, device, eggroll_config):
+        """
+        LowRankLinear should work as a drop-in for nn.Linear.
+        """
+        from hyperscalees.torch import LowRankLinear, EggrollStrategy
+        
+        model = nn.Sequential(
+            LowRankLinear(8, 16),
+            nn.ReLU(),
+            LowRankLinear(16, 2)
+        ).to(device)
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(model)
+        
+        x = torch.randn(4, 8, device=device)
+        
+        with strategy.perturb(population_size=4, epoch=0) as pop:
+            outputs = pop.batched_forward(model, x)
+        
+        assert outputs.shape == (4, 2), \
+            f"Output shape should be (4, 2), got {outputs.shape}"
+
+    def test_lowrank_linear_rank_parameter(self, device):
+        """
+        LowRankLinear should respect the rank parameter.
+        """
+        from hyperscalees.torch import LowRankLinear
+        
+        layer = LowRankLinear(64, 32, rank=8).to(device)
+        
+        assert layer.rank == 8, \
+            f"Layer rank should be 8, got {layer.rank}"
+        assert layer.U.shape == (32, 8), \
+            f"U factor should be (32, 8), got {layer.U.shape}"
+        assert layer.V.shape == (64, 8), \
+            f"V factor should be (64, 8), got {layer.V.shape}"
+
+    def test_lowrank_linear_forward_correctness(self, device):
+        """
+        LowRankLinear forward should produce correct results.
+        """
+        from hyperscalees.torch import LowRankLinear
+        
+        layer = LowRankLinear(8, 4, rank=4).to(device)
+        x = torch.randn(2, 8, device=device)
+        
+        # Forward pass
+        y = layer(x)
+        
+        # Manual computation: x @ V @ U.T + bias
+        expected = x @ layer.V @ layer.U.T
+        if layer.bias is not None:
+            expected = expected + layer.bias
+        
+        assert torch.allclose(y, expected, atol=1e-5), \
+            "Forward pass should equal x @ V @ U.T + bias"
+
+    def test_lowrank_linear_from_linear(self, device):
+        """
+        LowRankLinear.from_linear should approximate original nn.Linear.
+        """
+        from hyperscalees.torch import LowRankLinear
+        
+        # Create a full-rank linear
+        linear = nn.Linear(16, 8).to(device)
+        
+        # Convert to low-rank (full rank means exact reconstruction)
+        low_rank = LowRankLinear.from_linear(linear)
+        
+        x = torch.randn(4, 16, device=device)
+        
+        y_original = linear(x)
+        y_lowrank = low_rank(x)
+        
+        assert torch.allclose(y_original, y_lowrank, atol=1e-4), \
+            "Full-rank LowRankLinear should closely match original nn.Linear"
+
+    def test_lowrank_linear_weight_property(self, device):
+        """
+        weight property should return U @ V.T
+        """
+        from hyperscalees.torch import LowRankLinear
+        
+        layer = LowRankLinear(8, 4, rank=4).to(device)
+        
+        W_reconstructed = layer.weight
+        W_expected = layer.U @ layer.V.T
+        
+        assert torch.allclose(W_reconstructed, W_expected), \
+            "weight property should return U @ V.T"
+        assert W_reconstructed.shape == (4, 8), \
+            f"weight shape should be (out, in) = (4, 8), got {W_reconstructed.shape}"

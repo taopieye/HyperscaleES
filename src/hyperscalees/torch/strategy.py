@@ -16,7 +16,6 @@ from typing import Dict, Any, Optional, Iterator, List, Tuple, Union, ContextMan
 from dataclasses import dataclass, field
 
 from .perturbation import Perturbation, PerturbationContext
-from .module import LowRankLinear
 
 
 @dataclass
@@ -850,22 +849,6 @@ class EggrollStrategy(BaseStrategy):
                         pert_output[mask] = pert_contrib
                 
                 current_input = base_output + pert_output
-            
-            elif isinstance(module, LowRankLinear):
-                # LowRankLinear: W = U @ V.T, forward is x @ V @ U.T + bias
-                U = module.U  # (out_features, rank)
-                V = module.V  # (in_features, rank)
-                bias = module.bias
-                
-                # Compute base output: x @ V @ U.T
-                base_output = (current_input @ V) @ U.T
-                if bias is not None:
-                    base_output = base_output + bias
-                
-                # For now, LowRankLinear doesn't get additional perturbations
-                # (it's already low-rank by design)
-                # TODO: Could add perturbations to U and V factors
-                current_input = base_output
                 
             elif isinstance(module, (nn.ReLU, nn.Tanh, nn.Sigmoid, nn.GELU)):
                 # Activation functions - apply directly
@@ -1162,18 +1145,6 @@ class OpenESStrategy(BaseStrategy):
                         pert_output[mask] = pert_contrib
                 
                 current_input = base_output + pert_output
-            
-            elif isinstance(module, LowRankLinear):
-                # LowRankLinear: W = U @ V.T, forward is x @ V @ U.T + bias
-                U = module.U
-                V = module.V
-                bias = module.bias
-                
-                base_output = (current_input @ V) @ U.T
-                if bias is not None:
-                    base_output = base_output + bias
-                
-                current_input = base_output
                 
             elif isinstance(module, (nn.ReLU, nn.Tanh, nn.Sigmoid, nn.GELU)):
                 current_input = module(current_input)

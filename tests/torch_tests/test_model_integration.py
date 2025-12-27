@@ -396,9 +396,27 @@ class TestModelSerialization:
 class TestLowRankLinear:
     """Test the LowRankLinear layer for ES-optimized models."""
 
-    def test_lowrank_linear_basic_usage(self, device, eggroll_config):
+    def test_lowrank_linear_basic_forward(self, device):
         """
         LowRankLinear should work as a drop-in for nn.Linear.
+        """
+        from hyperscalees.torch import LowRankLinear
+        
+        model = nn.Sequential(
+            LowRankLinear(8, 16),
+            nn.ReLU(),
+            LowRankLinear(16, 2)
+        ).to(device)
+        
+        x = torch.randn(4, 8, device=device)
+        outputs = model(x)
+        
+        assert outputs.shape == (4, 2), \
+            f"Output shape should be (4, 2), got {outputs.shape}"
+
+    def test_lowrank_linear_with_iterate(self, device, eggroll_config):
+        """
+        LowRankLinear models work with iterate() API for sequential evaluation.
         """
         from hyperscalees.torch import LowRankLinear, EggrollStrategy
         
@@ -411,13 +429,16 @@ class TestLowRankLinear:
         strategy = EggrollStrategy(**eggroll_config.__dict__)
         strategy.setup(model)
         
-        x = torch.randn(4, 8, device=device)
+        x = torch.randn(1, 8, device=device)
+        outputs = []
         
         with strategy.perturb(population_size=4, epoch=0) as pop:
-            outputs = pop.batched_forward(model, x)
+            for member_id in pop.iterate():
+                out = model(x)
+                outputs.append(out.clone())
         
-        assert outputs.shape == (4, 2), \
-            f"Output shape should be (4, 2), got {outputs.shape}"
+        assert len(outputs) == 4, \
+            f"Should collect 4 outputs, got {len(outputs)}"
 
     def test_lowrank_linear_rank_parameter(self, device):
         """

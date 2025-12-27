@@ -26,9 +26,15 @@ class Perturbation:
     Attributes:
         A: Left factor, shape (m, r) where m is output dimension
         B: Right factor, shape (n, r) where n is input dimension
+        member_id: Population member index this perturbation belongs to
+        epoch: Epoch when this perturbation was generated
+        param_name: Name of the parameter this perturbation applies to
     """
     A: torch.Tensor
     B: torch.Tensor
+    member_id: Optional[int] = None
+    epoch: Optional[int] = None
+    param_name: Optional[str] = None
     
     @property
     def factors(self) -> Tuple[torch.Tensor, torch.Tensor]:

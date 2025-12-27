@@ -10,8 +10,9 @@ Contains:
 import torch
 import torch.nn as nn
 import math
+import warnings
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Iterator, List, Tuple, Union, ContextManager, Set
+from typing import Dict, Any, Optional, Iterator, List, Tuple, Union, ContextManager, Set, Callable
 from dataclasses import dataclass, field
 
 from .perturbation import Perturbation, PerturbationContext
@@ -55,9 +56,10 @@ class BaseStrategy(ABC):
         lr: float = 0.01,
         antithetic: bool = True,
         noise_reuse: int = 0,
-        optimizer: str = "sgd",
+        optimizer: Union[str, type] = "sgd",
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
+        fitness_transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
         **kwargs
     ):
         self._sigma = sigma
@@ -67,6 +69,7 @@ class BaseStrategy(ABC):
         self._optimizer_type = optimizer
         self._optimizer_kwargs = optimizer_kwargs or {}
         self._seed = seed or 42
+        self._fitness_transform = fitness_transform
         
         self._model: Optional[nn.Module] = None
         self._optimizer: Optional[torch.optim.Optimizer] = None
@@ -74,10 +77,16 @@ class BaseStrategy(ABC):
         self._in_perturbation_context: bool = False
         self._last_perturbations: Dict[str, List[Perturbation]] = {}
         self._last_epoch: int = 0
+        self._epoch: int = 0
+        self._total_steps: int = 0
         self._last_population_size: int = 0
         self._param_keys: Dict[str, int] = {}  # Maps param name to unique key
         self._included_params: Optional[Set[str]] = None
         self._excluded_params: Set[str] = set()
+        self._callbacks: Dict[str, List[Callable]] = {
+            'on_step': [],
+            'on_perturb': [],
+        }
     
     @classmethod
     def from_config(cls, config: Union[EggrollConfig, OpenESConfig]) -> 'BaseStrategy':
@@ -113,6 +122,62 @@ class BaseStrategy(ABC):
             for param_group in self._optimizer.param_groups:
                 param_group['lr'] = value
     
+    @property
+    def epoch(self) -> int:
+        """Current epoch counter."""
+        return self._epoch
+    
+    @property
+    def total_steps(self) -> int:
+        """Total number of update steps performed."""
+        return self._total_steps
+    
+    def register_callback(self, event: str, callback: Callable) -> None:
+        """
+        Register a callback for a specific event.
+        
+        Args:
+            event: Event name ('on_step', 'on_perturb')
+            callback: Callable to invoke when event occurs
+        """
+        if event not in self._callbacks:
+            raise ValueError(f"Unknown event: {event}. Valid events: {list(self._callbacks.keys())}")
+        self._callbacks[event].append(callback)
+    
+    def _trigger_callbacks(self, event: str, **kwargs) -> None:
+        """Trigger all callbacks for an event."""
+        for callback in self._callbacks.get(event, []):
+            callback(**kwargs)
+    
+    def get_antithetic_partner(self, member_id: int) -> int:
+        """
+        Get the antithetic partner index for a population member.
+        
+        Args:
+            member_id: Population member index
+        
+        Returns:
+            Partner index (member_id ^ 1 for antithetic pairs)
+        """
+        if not self._antithetic:
+            return member_id
+        # Even members pair with odd (0↔1, 2↔3, etc.)
+        return member_id ^ 1
+    
+    def is_positive_perturbation(self, member_id: int) -> bool:
+        """
+        Check if a member uses positive (+ε) or negative (-ε) perturbation.
+        
+        Args:
+            member_id: Population member index
+        
+        Returns:
+            True if positive perturbation, False if negative
+        """
+        if not self._antithetic:
+            return True
+        return member_id % 2 == 0
+
     def setup(
         self, 
         model: nn.Module,
@@ -184,12 +249,19 @@ class BaseStrategy(ABC):
         if len(params) == 0:
             return
         
-        if self._optimizer_type == "sgd":
-            self._optimizer = torch.optim.SGD(params, lr=self._lr, **self._optimizer_kwargs)
-        elif self._optimizer_type == "adam":
-            self._optimizer = torch.optim.Adam(params, lr=self._lr, **self._optimizer_kwargs)
-        elif self._optimizer_type == "adamw":
-            self._optimizer = torch.optim.AdamW(params, lr=self._lr, **self._optimizer_kwargs)
+        # Handle both string and class optimizer types
+        if isinstance(self._optimizer_type, str):
+            if self._optimizer_type == "sgd":
+                self._optimizer = torch.optim.SGD(params, lr=self._lr, **self._optimizer_kwargs)
+            elif self._optimizer_type == "adam":
+                self._optimizer = torch.optim.Adam(params, lr=self._lr, **self._optimizer_kwargs)
+            elif self._optimizer_type == "adamw":
+                self._optimizer = torch.optim.AdamW(params, lr=self._lr, **self._optimizer_kwargs)
+            else:
+                raise ValueError(f"Unknown optimizer: {self._optimizer_type}")
+        elif isinstance(self._optimizer_type, type) and issubclass(self._optimizer_type, torch.optim.Optimizer):
+            # Custom optimizer class passed
+            self._optimizer = self._optimizer_type(params, lr=self._lr, **self._optimizer_kwargs)
         else:
             raise ValueError(f"Unknown optimizer: {self._optimizer_type}")
     
@@ -258,7 +330,32 @@ class BaseStrategy(ABC):
         
         Returns:
             PerturbationContext for use in with statement
+        
+        Raises:
+            RuntimeError: If setup() has not been called
+            ValueError: If population_size <= 0
         """
+        # Validate setup
+        if self._model is None:
+            raise RuntimeError(
+                "Strategy not set up. Call setup(model) before perturb()."
+            )
+        
+        # Validate population size
+        if population_size <= 0:
+            raise ValueError(f"population_size must be positive, got {population_size}")
+        
+        # Warn about odd population with antithetic
+        if self._antithetic and population_size % 2 != 0:
+            warnings.warn(
+                f"Using antithetic sampling with odd population_size={population_size}. "
+                "The last member will not have a pair. Consider using an even population size.",
+                UserWarning
+            )
+        
+        self._trigger_callbacks('on_perturb', population_size=population_size, epoch=epoch)
+        self._last_population_size = population_size
+        
         return PerturbationContext(self, population_size, epoch)
     
     def eval(self) -> ContextManager:
@@ -406,10 +503,12 @@ class BaseStrategy(ABC):
             'lr': self._lr,
             'antithetic': self._antithetic,
             'noise_reuse': self._noise_reuse,
-            'optimizer_type': self._optimizer_type,
+            'optimizer_type': self._optimizer_type if isinstance(self._optimizer_type, str) else str(self._optimizer_type),
             'optimizer_kwargs': self._optimizer_kwargs,
             'seed': self._seed,
             'param_keys': self._param_keys,
+            'epoch': self._epoch,
+            'total_steps': self._total_steps,
         }
         
         if self._optimizer is not None:
@@ -427,6 +526,8 @@ class BaseStrategy(ABC):
         self._optimizer_kwargs = state.get('optimizer_kwargs', self._optimizer_kwargs)
         self._seed = state.get('seed', self._seed)
         self._param_keys = state.get('param_keys', self._param_keys)
+        self._epoch = state.get('epoch', self._epoch)
+        self._total_steps = state.get('total_steps', self._total_steps)
         
         if self._optimizer is not None and 'optimizer_state' in state:
             self._optimizer.load_state_dict(state['optimizer_state'])
@@ -479,18 +580,20 @@ class EggrollStrategy(BaseStrategy):
         member_id: int,
         epoch: int,
         param_key: int
-    ) -> torch.Generator:
+    ) -> Tuple[torch.Generator, int]:
         """
-        Get a deterministic generator for a specific perturbation.
+        Get a deterministic generator and seed for a specific perturbation.
         
         The generator is seeded based on:
         - Base seed
         - Epoch (considering noise_reuse)
         - Member ID (considering antithetic pairing)
         - Parameter key
-        """
-        gen = torch.Generator(device=self._device)
         
+        Returns:
+            Tuple of (CPU generator, seed) for deterministic noise generation.
+            We use CPU generator to avoid CUDA generator issues.
+        """
         # Compute effective epoch (for noise reuse)
         if self._noise_reuse == 0:
             effective_epoch = 0
@@ -511,8 +614,10 @@ class EggrollStrategy(BaseStrategy):
             param_key
         )
         
-        gen.manual_seed(combined_seed % (2**31 - 1))
-        return gen
+        seed = combined_seed % (2**31 - 1)
+        gen = torch.Generator()  # CPU generator
+        gen.manual_seed(seed)
+        return gen, seed
     
     def _sample_perturbation(
         self,
@@ -539,18 +644,17 @@ class EggrollStrategy(BaseStrategy):
         
         r = min(self._rank, m, n)  # Rank can't exceed matrix dimensions
         
-        # Get deterministic generator
+        # Get deterministic generator (on CPU)
         param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
-        gen = self._get_generator_for_perturbation(member_id, epoch, param_key)
+        gen, _ = self._get_generator_for_perturbation(member_id, epoch, param_key)
         
-        # Generate low-rank factors
+        # Generate low-rank factors on CPU then move to device
         # Combined tensor for both A and B, then split
         combined = torch.randn(
             (m + n, r), 
-            device=param.device, 
             dtype=param.dtype,
             generator=gen
-        )
+        ).to(param.device)
         
         A = combined[:m]  # (m, r)
         B = combined[m:]  # (n, r)
@@ -572,7 +676,7 @@ class EggrollStrategy(BaseStrategy):
             A = A.squeeze(-1)
             B = B.squeeze(-1)
         
-        return Perturbation(A=A, B=B)
+        return Perturbation(A=A, B=B, member_id=member_id, epoch=epoch, param_name=param_name)
     
     def sample_perturbations(
         self,
@@ -686,6 +790,10 @@ class EggrollStrategy(BaseStrategy):
         fitnesses = fitnesses.to(self._device)
         population_size = fitnesses.shape[0]
         
+        # Apply custom fitness transform if provided
+        if self._fitness_transform is not None:
+            fitnesses = self._fitness_transform(fitnesses)
+        
         # Normalize fitnesses
         normalized = self.normalize_fitnesses(fitnesses)
         
@@ -698,7 +806,7 @@ class EggrollStrategy(BaseStrategy):
         gradients = {}
         
         for name, param in self._model.named_parameters():
-            if not param.requires_grad:
+            if not self._should_evolve_param(name, param):
                 continue
             
             # Accumulate weighted perturbations
@@ -708,7 +816,7 @@ class EggrollStrategy(BaseStrategy):
                 grad_accum = torch.zeros_like(param)
                 
                 for i in range(population_size):
-                    pert = self._sample_perturbation(param, i, self._last_epoch, name)
+                    pert = self._sample_perturbation(param, i, self._epoch, name)
                     A, B = pert.factors
                     # Weighted contribution: f_i * A_i @ B_i.T
                     # Use einsum for efficiency: (r,) @ (m, r).T @ (n, r) -> (m, n)
@@ -722,7 +830,7 @@ class EggrollStrategy(BaseStrategy):
                 grad_accum = torch.zeros_like(param)
                 
                 for i in range(population_size):
-                    pert = self._sample_perturbation(param, i, self._last_epoch, name)
+                    pert = self._sample_perturbation(param, i, self._epoch, name)
                     A, B = pert.factors
                     weight = normalized[i].item()
                     grad_accum += weight * A * B
@@ -753,13 +861,17 @@ class EggrollStrategy(BaseStrategy):
                     total_param_delta += (p - params_before[n]).norm().item() ** 2
             total_param_delta = math.sqrt(total_param_delta)
         
-        self._last_epoch += 1
+        self._epoch += 1
+        self._total_steps += 1
+        self._last_epoch = self._epoch
         self._last_population_size = population_size
         
         metrics['grad_norm'] = total_grad_norm
         metrics['param_delta'] = total_param_delta
         metrics['fitness_mean'] = fitnesses.mean().item()
         metrics['fitness_std'] = fitnesses.std().item()
+        
+        self._trigger_callbacks('on_step', metrics=metrics, epoch=self._epoch)
         
         return metrics
 
@@ -777,10 +889,8 @@ class OpenESStrategy(BaseStrategy):
         member_id: int,
         epoch: int,
         param_key: int
-    ) -> torch.Generator:
-        """Get deterministic generator for a specific perturbation."""
-        gen = torch.Generator(device=self._device)
-        
+    ) -> Tuple[torch.Generator, int]:
+        """Get deterministic generator and seed for a specific perturbation."""
         if self._noise_reuse == 0:
             effective_epoch = 0
         else:
@@ -798,8 +908,10 @@ class OpenESStrategy(BaseStrategy):
             param_key
         )
         
-        gen.manual_seed(combined_seed % (2**31 - 1))
-        return gen
+        seed = combined_seed % (2**31 - 1)
+        gen = torch.Generator()  # CPU generator
+        gen.manual_seed(seed)
+        return gen, seed
     
     def _sample_perturbation(
         self,
@@ -815,15 +927,14 @@ class OpenESStrategy(BaseStrategy):
         for API compatibility. This means A is the full noise and B is identity-ish.
         """
         param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
-        gen = self._get_generator_for_perturbation(member_id, epoch, param_key)
+        gen, _ = self._get_generator_for_perturbation(member_id, epoch, param_key)
         
-        # Generate full perturbation
+        # Generate full perturbation on CPU then move to device
         noise = torch.randn(
             param.shape,
-            device=param.device,
             dtype=param.dtype,
             generator=gen
-        )
+        ).to(param.device)
         
         # Apply sigma and antithetic sign
         if self._antithetic and member_id % 2 == 1:
@@ -838,25 +949,14 @@ class OpenESStrategy(BaseStrategy):
             # Store as A=noise, B=ones (so A * B = noise)
             A = noise
             B = torch.ones(1, device=param.device, dtype=param.dtype)
-            return Perturbation(A=A, B=B)
+            return Perturbation(A=A, B=B, member_id=member_id, epoch=epoch, param_name=param_name)
         
-        # For 2D+, we need to represent full matrix as "low-rank"
-        # A = noise, B = identity-like
-        # But this defeats the purpose - for OpenES, we just store full noise
-        # Use rank = min(m, n) essentially
+        # For 2D+, store full noise with identity
         m, n = param.shape[0], param.shape[1]
-        r = min(m, n)
-        
-        # SVD decomposition to get low-rank factors (expensive but correct)
-        # For OpenES, we typically just use full noise directly
-        # For API compatibility, store A as (m, n) reshaped and B as identity
-        A = noise  # (m, n) - treated as (m, n) @ I_n.T = (m, n)
+        A = noise  # (m, n)
         B = torch.eye(n, device=param.device, dtype=param.dtype)  # (n, n)
         
-        # Actually, let's be smarter - return A and B such that A @ B.T = noise
-        # Simplest: A = noise, B = I[:, :n] but that's still full rank storage
-        # For OpenES we accept full storage
-        return Perturbation(A=noise, B=torch.eye(n, device=param.device, dtype=param.dtype))
+        return Perturbation(A=A, B=B, member_id=member_id, epoch=epoch, param_name=param_name)
     
     def sample_perturbations(
         self,
@@ -942,6 +1042,10 @@ class OpenESStrategy(BaseStrategy):
         fitnesses = fitnesses.to(self._device)
         population_size = fitnesses.shape[0]
         
+        # Apply custom fitness transform if provided
+        if self._fitness_transform is not None:
+            fitnesses = self._fitness_transform(fitnesses)
+        
         normalized = self.normalize_fitnesses(fitnesses)
         
         metrics = {}
@@ -951,13 +1055,13 @@ class OpenESStrategy(BaseStrategy):
         gradients = {}
         
         for name, param in self._model.named_parameters():
-            if not param.requires_grad:
+            if not self._should_evolve_param(name, param):
                 continue
             
             grad_accum = torch.zeros_like(param)
             
             for i in range(population_size):
-                pert = self._sample_perturbation(param, i, self._last_epoch, name)
+                pert = self._sample_perturbation(param, i, self._epoch, name)
                 A, B = pert.factors
                 if param.dim() >= 2:
                     delta = A @ B.T if B.dim() == 2 else A * B
@@ -988,12 +1092,16 @@ class OpenESStrategy(BaseStrategy):
                     total_param_delta += (p - params_before[n]).norm().item() ** 2
             total_param_delta = math.sqrt(total_param_delta)
         
-        self._last_epoch += 1
+        self._epoch += 1
+        self._total_steps += 1
+        self._last_epoch = self._epoch
         self._last_population_size = population_size
         
         metrics['grad_norm'] = total_grad_norm
         metrics['param_delta'] = total_param_delta
         metrics['fitness_mean'] = fitnesses.mean().item()
         metrics['fitness_std'] = fitnesses.std().item()
+        
+        self._trigger_callbacks('on_step', metrics=metrics, epoch=self._epoch)
         
         return metrics

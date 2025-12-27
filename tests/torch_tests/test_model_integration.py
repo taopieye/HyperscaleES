@@ -181,7 +181,9 @@ class TestParameterDiscovery:
         
         evolved_params = list(strategy.parameters())
         
-        assert model[0].weight not in evolved_params, \
+        # Use identity comparison to avoid tensor broadcasting errors
+        frozen_weight_evolved = any(p is model[0].weight for p in evolved_params)
+        assert not frozen_weight_evolved, \
             "Frozen parameter (requires_grad=False) should not be evolved"
 
 

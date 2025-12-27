@@ -805,20 +805,26 @@ class EggrollStrategy(BaseStrategy):
                 if bias is not None:
                     base_output = base_output + bias
                 
-                # Find a parameter in this module to use for should_evolve check
-                # For nn.Linear, weight is a Parameter; for LowRankLinear, U is
-                param_name = name + ".weight"
-                check_param = None
+                # Find the parameter name for this module's weight
+                # Handle both "module.weight" and bare "weight" (when model is the layer itself)
+                param_name = None
+                check_param = W
                 
+                # For nn.Linear, look for the weight parameter directly
                 for n, p in model.named_parameters():
-                    if n.startswith(name + "."):
-                        # Found a parameter in this module
+                    if p is W:
+                        param_name = n
+                        check_param = p
+                        break
+                    # Also check if this is a LowRankLinear (U parameter)
+                    if hasattr(module, 'U') and p is module.U:
                         param_name = n
                         check_param = p
                         break
                 
-                if check_param is None:
-                    check_param = W
+                if param_name is None:
+                    # Fallback: construct the name
+                    param_name = (name + ".weight") if name else "weight"
                 
                 # Check if this layer's parameters should be evolved
                 if not self._should_evolve_param(param_name, check_param):
@@ -1114,18 +1120,22 @@ class OpenESStrategy(BaseStrategy):
                 if bias is not None:
                     base_output = base_output + bias
                 
-                # Find a parameter in this module to use for should_evolve check
-                param_name = name + ".weight"
-                check_param = None
+                # Find the parameter name for this module's weight
+                param_name = None
+                check_param = W
                 
                 for n, p in model.named_parameters():
-                    if n.startswith(name + "."):
+                    if p is W:
+                        param_name = n
+                        check_param = p
+                        break
+                    if hasattr(module, 'U') and p is module.U:
                         param_name = n
                         check_param = p
                         break
                 
-                if check_param is None:
-                    check_param = W
+                if param_name is None:
+                    param_name = (name + ".weight") if name else "weight"
                 
                 # Check if this parameter should be evolved
                 if not self._should_evolve_param(param_name, check_param):

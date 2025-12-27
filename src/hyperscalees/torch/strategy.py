@@ -788,15 +788,16 @@ class EggrollStrategy(BaseStrategy):
         
         For each linear layer, computes:
             output[i] = x[i] @ W.T + bias + x[i] @ B[member_ids[i]] @ A[member_ids[i]].T
+        
+        Key optimization: Pre-generate ALL perturbation factors as batched tensors,
+        then use advanced indexing to select the right factors per sample.
         """
         batch_size = x.shape[0]
         current_input = x
         
         # Process each layer
         for name, module in model.named_modules():
-            # Handle linear-like layers (nn.Linear or anything with weight/bias like LowRankLinear)
             if isinstance(module, nn.Linear) or (hasattr(module, 'weight') and hasattr(module, 'in_features')):
-                # Get weight - works for nn.Linear and LowRankLinear (which has weight property)
                 W = module.weight  # (out_features, in_features)
                 bias = getattr(module, 'bias', None)
                 
@@ -805,68 +806,88 @@ class EggrollStrategy(BaseStrategy):
                 if bias is not None:
                     base_output = base_output + bias
                 
-                # Find the parameter name for this module's weight
-                # Handle both "module.weight" and bare "weight" (when model is the layer itself)
+                # Find parameter name
                 param_name = None
                 check_param = W
-                
-                # For nn.Linear, look for the weight parameter directly
                 for n, p in model.named_parameters():
                     if p is W:
                         param_name = n
                         check_param = p
                         break
-                    # Also check if this is a LowRankLinear (U parameter)
                     if hasattr(module, 'U') and p is module.U:
                         param_name = n
                         check_param = p
                         break
                 
                 if param_name is None:
-                    # Fallback: construct the name
                     param_name = (name + ".weight") if name else "weight"
                 
-                # Check if this layer's parameters should be evolved
                 if not self._should_evolve_param(param_name, check_param):
-                    # Skip perturbation for frozen/excluded parameters
                     current_input = base_output
                     continue
                 
-                # Compute perturbation output for each batch element
-                # Sample perturbations based on W shape (the effective weight matrix)
-                unique_members = torch.unique(member_ids)
+                # === BATCHED PERTURBATION GENERATION ===
+                # Generate all A and B factors at once for all population members
+                m_out, n_in = W.shape
+                r = min(self._rank, m_out, n_in)
                 
-                # Pre-compute perturbation factors for all unique members
-                perturbations = {}
+                # Get seeds for all members (vectorized seed computation)
+                param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
                 
-                for m in unique_members.tolist():
-                    pert = self._sample_perturbation(W, int(m), epoch, param_name)
-                    perturbations[int(m)] = pert
+                # Pre-allocate tensors for all population members
+                # A: (population_size, out_features, rank)
+                # B: (population_size, in_features, rank)
+                all_A = torch.empty(population_size, m_out, r, device=x.device, dtype=x.dtype)
+                all_B = torch.empty(population_size, n_in, r, device=x.device, dtype=x.dtype)
                 
-                # Compute perturbation contributions
-                # For each sample, add x @ B @ A.T
-                pert_output = torch.zeros_like(base_output)
+                sigma_scaled = self._sigma / math.sqrt(r)
                 
-                for m in unique_members.tolist():
-                    mask = (member_ids == m)
-                    if mask.any():
-                        A, B = perturbations[int(m)].factors
-                        # x @ B @ A.T for samples with this member_id
-                        x_subset = current_input[mask]  # (subset_size, in_features)
-                        # Efficient computation: (x @ B) @ A.T
-                        pert_contrib = (x_subset @ B) @ A.T  # (subset_size, out_features)
-                        pert_output[mask] = pert_contrib
+                # Generate perturbations for all members
+                # TODO: This loop could be further optimized with a custom CUDA kernel
+                # but the key is we do the generation ONCE, not per-layer-per-member
+                for member_id in range(population_size):
+                    gen, _ = self._get_generator_for_perturbation(member_id, epoch, param_key)
+                    
+                    combined = torch.randn(
+                        (m_out + n_in, r),
+                        dtype=x.dtype,
+                        generator=gen
+                    ).to(x.device)
+                    
+                    A = combined[:m_out]
+                    B = combined[m_out:]
+                    
+                    # Apply sigma and antithetic sign
+                    sign = -1.0 if (self._antithetic and member_id % 2 == 1) else 1.0
+                    all_A[member_id] = A * sigma_scaled * sign
+                    all_B[member_id] = B
+                
+                # === BATCHED PERTURBATION APPLICATION ===
+                # Select the right A and B for each sample using advanced indexing
+                # member_ids: (batch_size,) -> indices into all_A and all_B
+                A_selected = all_A[member_ids]  # (batch_size, out_features, rank)
+                B_selected = all_B[member_ids]  # (batch_size, in_features, rank)
+                
+                # Compute x @ B @ A.T for all samples in parallel
+                # current_input: (batch_size, in_features)
+                # B_selected: (batch_size, in_features, rank)
+                # A_selected: (batch_size, out_features, rank)
+                
+                # Step 1: x @ B -> (batch_size, rank)
+                # Use einsum for batched matmul: (b, n) @ (b, n, r) -> (b, r)
+                xB = torch.einsum('bn,bnr->br', current_input, B_selected)
+                
+                # Step 2: (x @ B) @ A.T -> (batch_size, out_features)  
+                # Use einsum: (b, r) @ (b, m, r).T -> (b, m)
+                pert_output = torch.einsum('br,bmr->bm', xB, A_selected)
                 
                 current_input = base_output + pert_output
                 
             elif isinstance(module, (nn.ReLU, nn.Tanh, nn.Sigmoid, nn.GELU)):
-                # Activation functions - apply directly
                 current_input = module(current_input)
             elif isinstance(module, nn.Sequential):
-                # Skip sequential containers - we process their children
                 pass
             elif isinstance(module, nn.Dropout):
-                # Apply dropout (typically in eval mode, so no-op)
                 current_input = module(current_input)
             elif isinstance(module, nn.BatchNorm1d):
                 current_input = module(current_input)
@@ -1111,7 +1132,6 @@ class OpenESStrategy(BaseStrategy):
         current_input = x
         
         for name, module in model.named_modules():
-            # Handle linear-like layers (nn.Linear or anything with weight/bias like LowRankLinear)
             if isinstance(module, nn.Linear) or (hasattr(module, 'weight') and hasattr(module, 'in_features')):
                 W = module.weight
                 bias = getattr(module, 'bias', None)
@@ -1120,10 +1140,8 @@ class OpenESStrategy(BaseStrategy):
                 if bias is not None:
                     base_output = base_output + bias
                 
-                # Find the parameter name for this module's weight
                 param_name = None
                 check_param = W
-                
                 for n, p in model.named_parameters():
                     if p is W:
                         param_name = n
@@ -1137,29 +1155,39 @@ class OpenESStrategy(BaseStrategy):
                 if param_name is None:
                     param_name = (name + ".weight") if name else "weight"
                 
-                # Check if this parameter should be evolved
                 if not self._should_evolve_param(param_name, check_param):
                     current_input = base_output
                     continue
                 
-                unique_members = torch.unique(member_ids)
+                # === BATCHED PERTURBATION FOR OPENES ===
+                m_out, n_in = W.shape
+                param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
                 
-                perturbations = {}
-                for m in unique_members.tolist():
-                    pert = self._sample_perturbation(W, int(m), epoch, param_name)
-                    perturbations[int(m)] = pert
+                # Pre-allocate full noise tensors for all population members
+                # all_noise: (population_size, out_features, in_features)
+                all_noise = torch.empty(population_size, m_out, n_in, device=x.device, dtype=x.dtype)
                 
-                pert_output = torch.zeros_like(base_output)
+                for member_id in range(population_size):
+                    gen, _ = self._get_generator_for_perturbation(member_id, epoch, param_key)
+                    
+                    noise = torch.randn(
+                        (m_out, n_in),
+                        dtype=x.dtype,
+                        generator=gen
+                    ).to(x.device)
+                    
+                    sign = -1.0 if (self._antithetic and member_id % 2 == 1) else 1.0
+                    all_noise[member_id] = noise * self._sigma * sign
                 
-                for m in unique_members.tolist():
-                    mask = (member_ids == m)
-                    if mask.any():
-                        # For OpenES, A is the full perturbation
-                        A, B = perturbations[int(m)].factors
-                        delta_W = A @ B.T if B.dim() == 2 else A * B
-                        x_subset = current_input[mask]
-                        pert_contrib = x_subset @ delta_W.T
-                        pert_output[mask] = pert_contrib
+                # Select noise for each sample and apply
+                # noise_selected: (batch_size, out_features, in_features)
+                noise_selected = all_noise[member_ids]
+                
+                # Compute x @ noise.T for all samples in parallel
+                # current_input: (batch_size, in_features)
+                # noise_selected: (batch_size, out_features, in_features)
+                # Result: (batch_size, out_features)
+                pert_output = torch.einsum('bi,boi->bo', current_input, noise_selected)
                 
                 current_input = base_output + pert_output
                 

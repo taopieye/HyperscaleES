@@ -794,37 +794,40 @@ class EggrollStrategy(BaseStrategy):
         
         # Process each layer
         for name, module in model.named_modules():
-            if isinstance(module, nn.Linear):
-                # Get base weight and bias
+            # Handle linear-like layers (nn.Linear or anything with weight/bias like LowRankLinear)
+            if isinstance(module, nn.Linear) or (hasattr(module, 'weight') and hasattr(module, 'in_features')):
+                # Get weight - works for nn.Linear and LowRankLinear (which has weight property)
                 W = module.weight  # (out_features, in_features)
-                bias = module.bias  # (out_features,) or None
+                bias = getattr(module, 'bias', None)
                 
                 # Compute base output: x @ W.T
                 base_output = current_input @ W.T
                 if bias is not None:
                     base_output = base_output + bias
                 
-                # Find the parameter name for this weight
-                param_name = None
+                # Find a parameter in this module to use for should_evolve check
+                # For nn.Linear, weight is a Parameter; for LowRankLinear, U is
+                param_name = name + ".weight"
+                check_param = None
+                
                 for n, p in model.named_parameters():
-                    if p is W:
+                    if n.startswith(name + "."):
+                        # Found a parameter in this module
                         param_name = n
+                        check_param = p
                         break
                 
-                if param_name is None:
-                    # Fallback for modules not in direct named_parameters
-                    param_name = name + ".weight"
+                if check_param is None:
+                    check_param = W
                 
-                # Check if this parameter should be evolved
-                if not self._should_evolve_param(param_name, W):
+                # Check if this layer's parameters should be evolved
+                if not self._should_evolve_param(param_name, check_param):
                     # Skip perturbation for frozen/excluded parameters
                     current_input = base_output
                     continue
                 
                 # Compute perturbation output for each batch element
-                # We need to apply different perturbations based on member_ids
-                
-                # Get all unique perturbations needed
+                # Sample perturbations based on W shape (the effective weight matrix)
                 unique_members = torch.unique(member_ids)
                 
                 # Pre-compute perturbation factors for all unique members
@@ -1102,26 +1105,30 @@ class OpenESStrategy(BaseStrategy):
         current_input = x
         
         for name, module in model.named_modules():
-            if isinstance(module, nn.Linear):
+            # Handle linear-like layers (nn.Linear or anything with weight/bias like LowRankLinear)
+            if isinstance(module, nn.Linear) or (hasattr(module, 'weight') and hasattr(module, 'in_features')):
                 W = module.weight
-                bias = module.bias
+                bias = getattr(module, 'bias', None)
                 
                 base_output = current_input @ W.T
                 if bias is not None:
                     base_output = base_output + bias
                 
-                # Find the parameter name for this weight
-                param_name = None
+                # Find a parameter in this module to use for should_evolve check
+                param_name = name + ".weight"
+                check_param = None
+                
                 for n, p in model.named_parameters():
-                    if p is W:
+                    if n.startswith(name + "."):
                         param_name = n
+                        check_param = p
                         break
-                if param_name is None:
-                    param_name = name + ".weight"
+                
+                if check_param is None:
+                    check_param = W
                 
                 # Check if this parameter should be evolved
-                if not self._should_evolve_param(param_name, W):
-                    # Skip perturbation for frozen/excluded parameters
+                if not self._should_evolve_param(param_name, check_param):
                     current_input = base_output
                     continue
                 

@@ -414,9 +414,9 @@ class TestLowRankLinear:
         assert outputs.shape == (4, 2), \
             f"Output shape should be (4, 2), got {outputs.shape}"
 
-    def test_lowrank_linear_with_iterate(self, device, eggroll_config):
+    def test_lowrank_linear_with_batched_forward(self, device, eggroll_config):
         """
-        LowRankLinear models work with iterate() API for sequential evaluation.
+        LowRankLinear models work with batched_forward API.
         """
         from hyperscalees.torch import LowRankLinear, EggrollStrategy
         
@@ -429,16 +429,13 @@ class TestLowRankLinear:
         strategy = EggrollStrategy(**eggroll_config.__dict__)
         strategy.setup(model)
         
-        x = torch.randn(1, 8, device=device)
-        outputs = []
+        x = torch.randn(4, 8, device=device)
         
         with strategy.perturb(population_size=4, epoch=0) as pop:
-            for member_id in pop.iterate():
-                out = model(x)
-                outputs.append(out.clone())
+            outputs = pop.batched_forward(model, x)
         
-        assert len(outputs) == 4, \
-            f"Should collect 4 outputs, got {len(outputs)}"
+        assert outputs.shape == (4, 2), \
+            f"Output shape should be (4, 2), got {outputs.shape}"
 
     def test_lowrank_linear_rank_parameter(self, device):
         """

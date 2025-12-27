@@ -101,39 +101,54 @@ def evaluate_population_batched(
     strategy: "EggrollStrategy",
     population_size: int,
     epoch: int,
-    env: "gym.Env",
+    env_fn,  # Factory function to create envs
     device: torch.device,
     max_steps: int = 500,
 ) -> torch.Tensor:
     """
-    Evaluate all population members using batched forward.
+    Evaluate all population members in parallel using vectorized environments.
     
-    For RL, we can't truly batch across different trajectories,
-    but we can batch the policy forward passes within a step.
+    This properly batches both:
+    1. Environment steps (using gymnasium's vectorized envs)
+    2. Policy forward passes (using batched_forward)
     """
+    # Create vectorized environment with one env per population member
+    envs = gym.vector.SyncVectorEnv([env_fn for _ in range(population_size)])
+    
     fitnesses = torch.zeros(population_size, device=device)
+    active = torch.ones(population_size, dtype=torch.bool, device=device)
+    
+    # Reset all environments
+    obs, _ = envs.reset()
+    obs_tensor = torch.tensor(obs, dtype=torch.float32, device=device)
+    
+    # Member IDs for batched forward - each env corresponds to one population member
+    member_ids = torch.arange(population_size, device=device)
     
     with strategy.perturb(population_size=population_size, epoch=epoch) as pop:
-        for member_id in range(population_size):
-            obs, _ = env.reset()
-            episode_reward = 0.0
+        for step in range(max_steps):
+            if not active.any():
+                break
             
-            for _ in range(max_steps):
-                obs_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-                member_ids = torch.tensor([member_id], device=device)
-                
-                # Use batched_forward for perturbed evaluation
-                logits = pop.batched_forward(model, obs_tensor, member_ids=member_ids)
-                action = logits.argmax().item()
-                
-                obs, reward, terminated, truncated, _ = env.step(action)
-                episode_reward += reward
-                
-                if terminated or truncated:
-                    break
+            # Batch forward pass for ALL active population members at once
+            # This is the key efficiency gain!
+            logits = pop.batched_forward(model, obs_tensor, member_ids=member_ids)
+            actions = logits.argmax(dim=-1).cpu().numpy()
             
-            fitnesses[member_id] = episode_reward
+            # Step all environments in parallel
+            obs, rewards, terminated, truncated, _ = envs.step(actions)
+            
+            # Update fitnesses and active mask
+            rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
+            fitnesses += rewards_tensor * active.float()
+            
+            done = torch.tensor(terminated | truncated, device=device)
+            active = active & ~done
+            
+            # Update observations for next step
+            obs_tensor = torch.tensor(obs, dtype=torch.float32, device=device)
     
+    envs.close()
     return fitnesses
 
 
@@ -189,8 +204,9 @@ def run_benchmark(
     
     from hyperscalees.torch import EggrollStrategy, OpenESStrategy
     
-    # Create environment
-    env = gym.make("CartPole-v1")
+    # Environment factory for vectorized envs
+    def make_env():
+        return gym.make("CartPole-v1")
     
     # Create model
     torch.manual_seed(seed)
@@ -208,13 +224,13 @@ def run_benchmark(
     for gen in range(n_generations):
         gen_start = time.time()
         
-        # Evaluate population
+        # Evaluate population with truly batched evaluation
         fitnesses = evaluate_population_batched(
             model=model,
             strategy=strategy,
             population_size=population_size,
             epoch=gen,
-            env=env,
+            env_fn=make_env,
             device=device,
         )
         
@@ -245,7 +261,6 @@ def run_benchmark(
     result.total_time = time.time() - start_time
     result.final_best = best_ever
     
-    env.close()
     return result
 
 

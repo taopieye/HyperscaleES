@@ -318,27 +318,57 @@ class TestModelState:
 class TestDeviceHandling:
     """Verify correct device handling (GPU required)."""
 
-    def test_cuda_model_works(self, device, eggroll_config):
+    def test_cuda_model_produces_correct_output(self, device, eggroll_config):
         """
-        Should work with CUDA models.
+        CUDA model should produce correct perturbed outputs.
+        
+        Verifies:
+        1. Output is on CUDA
+        2. Output shape is correct
+        3. Different population members produce different outputs
+        4. Output values are in expected range
         """
         from hyperscalees.torch import EggrollStrategy
         
-        model = nn.Linear(8, 4).to(device)
+        in_features, out_features = 8, 4
+        population_size = 8
+        
+        model = nn.Linear(in_features, out_features, bias=False).to(device)
+        # Set known weights for predictable output
+        with torch.no_grad():
+            model.weight.fill_(0.1)
+        
         strategy = EggrollStrategy(**eggroll_config.__dict__)
         strategy.setup(model)
         
-        x = torch.randn(8, 8, device=device)
+        # Use known input
+        x = torch.ones(population_size, in_features, device=device)
         
-        with strategy.perturb(population_size=8, epoch=0) as pop:
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
             output = pop.batched_forward(model, x)
         
+        # 1. Check device
         assert output.device.type == "cuda", \
             f"Output should be on CUDA, got {output.device}"
+        
+        # 2. Check shape
+        assert output.shape == (population_size, out_features), \
+            f"Expected shape ({population_size}, {out_features}), got {output.shape}"
+        
+        # 3. Different members should have different outputs (due to perturbations)
+        for i in range(population_size - 1):
+            assert not torch.allclose(output[i], output[i + 1], atol=1e-6), \
+                f"Members {i} and {i+1} should have different outputs"
+        
+        # 4. Values should be in expected range
+        # Base output: x @ W.T = ones(8) @ [0.1, 0.1, ..., 0.1].T = 0.8
+        base_expected = in_features * 0.1
+        assert (output.mean() - base_expected).abs() < 2.0, \
+            f"Output mean {output.mean():.3f} far from expected ~{base_expected}"
 
-    def test_rejects_cpu_model(self, eggroll_config):
+    def test_rejects_cpu_model_with_helpful_message(self, eggroll_config):
         """
-        Should reject CPU models with a helpful error message.
+        Should reject CPU models with a helpful error message explaining why GPU is needed.
         """
         from hyperscalees.torch import EggrollStrategy
         

@@ -576,6 +576,7 @@ class TestUpdateQuality:
         For differentiable fitness, ES gradient should correlate with true gradient.
         
         This is an empirical validation that ES is doing something sensible.
+        We run multiple trials to get statistical significance.
         """
         from hyperscalees.torch import EggrollStrategy
         
@@ -586,40 +587,69 @@ class TestUpdateQuality:
         target = torch.randn(8, 2, device=device)
         x = torch.randn(8, 4, device=device)
         
-        # Compute true gradient
-        model.zero_grad()
-        output = model(x)
-        loss = ((output - target) ** 2).sum()
-        loss.backward()
-        true_grad = model.weight.grad.clone()
+        # Run multiple trials for statistical robustness
+        n_trials = 5
+        correlations = []
         
-        # Compute ES gradient
-        strategy = EggrollStrategy(sigma=0.01, lr=1.0, rank=4)  # lr=1 so update = gradient
-        strategy.setup(model)
-        
-        population_size = 256  # Large population for good estimate
-        
-        with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            # Expand input for all population members
-            x_batch = x.unsqueeze(0).expand(population_size, -1, -1).reshape(population_size * x.shape[0], x.shape[1])
-            member_ids = torch.arange(population_size, device=device).repeat_interleave(x.shape[0])
-            outputs_flat = pop.batched_forward(model, x_batch, member_ids=member_ids)
-            outputs = outputs_flat.reshape(population_size, x.shape[0], -1)
-            # Compute negative loss as fitness for each member
-            target_expanded = target.unsqueeze(0).expand(population_size, -1, -1)
-            fitnesses = -((outputs - target_expanded) ** 2).sum(dim=(1, 2))
-        
-        before = model.weight.clone()
-        strategy.step(fitnesses)
-        after = model.weight.clone()
-        
-        es_grad = after - before  # With lr=1, this approximates gradient direction
+        for trial in range(n_trials):
+            # Reset model
+            with torch.no_grad():
+                model.weight.normal_()
+            
+            # Compute true gradient
+            model.zero_grad()
+            output = model(x)
+            loss = ((output - target) ** 2).sum()
+            loss.backward()
+            true_grad = model.weight.grad.clone()
+            
+            # Compute ES gradient
+            strategy = EggrollStrategy(
+                sigma=0.005,  # Small sigma for accurate gradient
+                lr=1.0,  # lr=1 so update = gradient direction
+                rank=4,
+                seed=trial * 12345
+            )
+            strategy.setup(model)
+            
+            population_size = 512  # Large population for good estimate
+            
+            with strategy.perturb(population_size=population_size, epoch=0) as pop:
+                # Expand input for all population members
+                x_batch = x.unsqueeze(0).expand(population_size, -1, -1).reshape(population_size * x.shape[0], x.shape[1])
+                member_ids = torch.arange(population_size, device=device).repeat_interleave(x.shape[0])
+                outputs_flat = pop.batched_forward(model, x_batch, member_ids=member_ids)
+                outputs = outputs_flat.reshape(population_size, x.shape[0], -1)
+                # Compute negative loss as fitness for each member
+                target_expanded = target.unsqueeze(0).expand(population_size, -1, -1)
+                fitnesses = -((outputs - target_expanded) ** 2).sum(dim=(1, 2))
+            
+            before = model.weight.clone()
+            strategy.step(fitnesses)
+            after = model.weight.clone()
+            
+            es_grad = after - before  # With lr=1, this approximates gradient direction
+            
+            # Compute cosine similarity (more robust than raw correlation)
+            true_flat = true_grad.flatten()
+            es_flat = es_grad.flatten()
+            cosine_sim = (true_flat @ es_flat) / (true_flat.norm() * es_flat.norm() + 1e-8)
+            correlations.append(cosine_sim.item())
         
         # ES gradient should be negatively correlated with loss gradient
         # (ES maximizes fitness = -loss, so should move opposite to loss gradient)
-        correlation = (es_grad * true_grad).sum()
-        # Note: correlation should be negative since ES maximizes and we computed loss gradient
-        assert correlation < 0, "ES gradient should anti-correlate with loss gradient"
+        mean_correlation = sum(correlations) / len(correlations)
+        
+        # At least 3 out of 5 trials should show anti-correlation
+        negative_count = sum(1 for c in correlations if c < 0)
+        assert negative_count >= 3, \
+            f"Expected at least 3/5 trials to show anti-correlation, got {negative_count}/5. " \
+            f"Correlations: {[f'{c:.3f}' for c in correlations]}"
+        
+        # Mean should be negative
+        assert mean_correlation < 0, \
+            f"Mean ES-true gradient correlation should be negative, got {mean_correlation:.4f}. " \
+            f"Correlations: {[f'{c:.3f}' for c in correlations]}"
 
 
 # ============================================================================

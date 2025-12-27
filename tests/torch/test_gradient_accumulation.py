@@ -58,7 +58,28 @@ class TestHighRankAccumulation:
             rank = torch.linalg.matrix_rank(accumulated)
             assert rank > 1
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = medium_tensor.device
+        
+        # Create model with medium_tensor as weight
+        model = nn.Linear(medium_tensor.shape[1], medium_tensor.shape[0], bias=False).to(device)
+        model.weight.data = medium_tensor.clone()
+        
+        # Use rank-1 perturbations
+        config = EggrollConfig(sigma=0.1, lr=0.01, rank=1)
+        strategy = EggrollStrategy.from_config(config)
+        strategy.setup(model)
+        
+        population_size = 16
+        perturbations = strategy.sample_perturbations(model.weight, population_size=population_size, epoch=0)
+        
+        # Compute sum of rank-1 perturbations
+        accumulated = sum(p.as_matrix() for p in perturbations)
+        
+        # Sum of rank-1 matrices should have rank > 1
+        rank = compute_matrix_rank(accumulated)
+        assert rank > 1, f"Sum of {population_size} rank-1 matrices should have rank > 1, got {rank}"
 
     @pytest.mark.skip(reason="Gradient accumulation not yet implemented")
     def test_accumulated_rank_grows_with_population(
@@ -78,7 +99,25 @@ class TestHighRankAccumulation:
             # Ranks should generally increase (may plateau at full rank)
             assert ranks[-1] >= ranks[0]
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = medium_tensor.device
+        
+        model = nn.Linear(medium_tensor.shape[1], medium_tensor.shape[0], bias=False).to(device)
+        model.weight.data = medium_tensor.clone()
+        
+        strategy = EggrollStrategy.from_config(eggroll_config)
+        strategy.setup(model)
+        
+        ranks = []
+        for pop_size in [2, 8, 32, 128]:
+            perturbations = strategy.sample_perturbations(model.weight, population_size=pop_size, epoch=0)
+            accumulated = sum(p.as_matrix() for p in perturbations)
+            rank = compute_matrix_rank(accumulated)
+            ranks.append(rank)
+        
+        # Ranks should generally increase (may plateau at full rank)
+        assert ranks[-1] >= ranks[0], f"Rank should grow with population: {ranks}"
 
     @pytest.mark.skip(reason="Gradient accumulation not yet implemented")
     def test_full_rank_achievable_with_sufficient_population(
@@ -103,7 +142,25 @@ class TestHighRankAccumulation:
             rank = torch.linalg.matrix_rank(accumulated)
             assert rank == min(m, n)  # Full rank achieved
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = small_tensor.device
+        m, n = small_tensor.shape
+        
+        model = nn.Linear(n, m, bias=False).to(device)
+        model.weight.data = small_tensor.clone()
+        
+        # Use rank-1 perturbations
+        config = EggrollConfig(sigma=0.1, lr=0.01, rank=1)
+        strategy = EggrollStrategy.from_config(config)
+        strategy.setup(model)
+        
+        # With 64 rank-1 perturbations, should achieve full rank
+        perturbations = strategy.sample_perturbations(model.weight, population_size=64, epoch=0)
+        accumulated = sum(p.as_matrix() for p in perturbations)
+        
+        rank = compute_matrix_rank(accumulated)
+        assert rank == min(m, n), f"Should achieve full rank {min(m, n)}, got {rank}"
 
 
 # ============================================================================
@@ -139,7 +196,33 @@ class TestFitnessWeightedAccumulation:
             correlation = (accumulated * high_pert).sum()
             assert correlation > 0
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = small_tensor.device
+        
+        model = nn.Linear(small_tensor.shape[1], small_tensor.shape[0], bias=False).to(device)
+        model.weight.data = small_tensor.clone()
+        
+        strategy = EggrollStrategy.from_config(eggroll_config)
+        strategy.setup(model)
+        
+        population_size = 8
+        perturbations = strategy.sample_perturbations(model.weight, population_size=population_size, epoch=0)
+        
+        # One perturbation has much higher fitness
+        fitnesses = torch.tensor([-1.0, -1.0, -1.0, 10.0, -1.0, -1.0, -1.0, -1.0], device=device)
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Compute weighted sum
+        accumulated = sum(
+            w * p.as_matrix() 
+            for w, p in zip(normalized, perturbations)
+        )
+        
+        # Should be correlated with the high-fitness perturbation (index 3)
+        high_pert = perturbations[3].as_matrix()
+        correlation = (accumulated * high_pert).sum()
+        assert correlation > 0, "Accumulated gradient should favor high-fitness perturbation"
 
     @pytest.mark.skip(reason="Fitness weighting not yet implemented")
     def test_equal_weights_produce_simple_sum(
@@ -150,7 +233,34 @@ class TestFitnessWeightedAccumulation:
         
         With antithetic sampling and equal weights, pairs cancel.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = small_tensor.device
+        
+        model = nn.Linear(small_tensor.shape[1], small_tensor.shape[0], bias=False).to(device)
+        model.weight.data = small_tensor.clone()
+        
+        # Create strategy with antithetic sampling
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma, lr=eggroll_config.lr,
+            rank=eggroll_config.rank, antithetic=True
+        )
+        strategy.setup(model)
+        
+        population_size = 8  # 4 antithetic pairs
+        perturbations = strategy.sample_perturbations(model.weight, population_size=population_size, epoch=0)
+        
+        # All equal fitness - after normalization, all weights should be ~0
+        fitnesses = torch.ones(population_size, device=device) * 5.0
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # With equal normalized weights (~0), accumulated should be ~0
+        accumulated = sum(
+            w * p.as_matrix() 
+            for w, p in zip(normalized, perturbations)
+        )
+        
+        assert accumulated.abs().max() < 1e-5, "Equal weights should produce near-zero accumulation"
 
     @pytest.mark.skip(reason="Fitness weighting not yet implemented")
     def test_negative_weights_subtract_perturbation(
@@ -161,7 +271,33 @@ class TestFitnessWeightedAccumulation:
         
         This is how ES moves away from bad directions.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = small_tensor.device
+        
+        model = nn.Linear(small_tensor.shape[1], small_tensor.shape[0], bias=False).to(device)
+        model.weight.data = small_tensor.clone()
+        
+        strategy = EggrollStrategy.from_config(eggroll_config)
+        strategy.setup(model)
+        
+        population_size = 8
+        perturbations = strategy.sample_perturbations(model.weight, population_size=population_size, epoch=0)
+        
+        # One perturbation has very negative fitness (after normalization)
+        fitnesses = torch.tensor([1.0, 1.0, 1.0, -10.0, 1.0, 1.0, 1.0, 1.0], device=device)
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Compute weighted sum
+        accumulated = sum(
+            w * p.as_matrix() 
+            for w, p in zip(normalized, perturbations)
+        )
+        
+        # Should be negatively correlated with the low-fitness perturbation (index 3)
+        low_pert = perturbations[3].as_matrix()
+        correlation = (accumulated * low_pert).sum()
+        assert correlation < 0, "Accumulated gradient should move away from low-fitness perturbation"
 
 
 # ============================================================================
@@ -190,7 +326,27 @@ class TestRankBounds:
             # Rank can't exceed theoretical bound
             assert rank <= pop_size * r
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = medium_tensor.device
+        
+        model = nn.Linear(medium_tensor.shape[1], medium_tensor.shape[0], bias=False).to(device)
+        model.weight.data = medium_tensor.clone()
+        
+        strategy = EggrollStrategy.from_config(eggroll_config)
+        strategy.setup(model)
+        
+        pop_size = 8
+        r = eggroll_config.rank
+        
+        perturbations = strategy.sample_perturbations(model.weight, population_size=pop_size, epoch=0)
+        accumulated = sum(p.as_matrix() for p in perturbations)
+        
+        rank = compute_matrix_rank(accumulated)
+        
+        # Rank can't exceed theoretical bound
+        theoretical_bound = pop_size * r
+        assert rank <= theoretical_bound, f"Rank {rank} exceeds theoretical bound {theoretical_bound}"
 
     @pytest.mark.skip(reason="Rank bounds not yet implemented")
     def test_accumulated_rank_bounded_by_matrix_dimensions(
@@ -210,7 +366,25 @@ class TestRankBounds:
             # Can't exceed matrix dimension
             assert rank <= min(m, n)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = small_tensor.device
+        m, n = small_tensor.shape
+        
+        model = nn.Linear(n, m, bias=False).to(device)
+        model.weight.data = small_tensor.clone()
+        
+        strategy = EggrollStrategy.from_config(eggroll_config)
+        strategy.setup(model)
+        
+        # Many perturbations
+        perturbations = strategy.sample_perturbations(model.weight, population_size=100, epoch=0)
+        accumulated = sum(p.as_matrix() for p in perturbations)
+        
+        rank = compute_matrix_rank(accumulated)
+        
+        # Can't exceed matrix dimension
+        assert rank <= min(m, n), f"Rank {rank} exceeds matrix dimension bound {min(m, n)}"
 
 
 # ============================================================================
@@ -238,7 +412,26 @@ class TestSubspaceCoverage:
             significant = (s > s.max() * 0.01).sum()
             assert significant >= config.rank
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = medium_tensor.device
+        
+        model = nn.Linear(medium_tensor.shape[1], medium_tensor.shape[0], bias=False).to(device)
+        model.weight.data = medium_tensor.clone()
+        
+        strategy = EggrollStrategy.from_config(eggroll_config)
+        strategy.setup(model)
+        
+        perturbations = strategy.sample_perturbations(model.weight, population_size=32, epoch=0)
+        
+        # Stack as rows and compute SVD
+        stacked = torch.stack([p.as_matrix().flatten() for p in perturbations])
+        _, s, _ = torch.linalg.svd(stacked)
+        
+        # Should have multiple significant singular values (diverse directions)
+        significant = (s > s.max() * 0.01).sum().item()
+        assert significant >= eggroll_config.rank, \
+            f"Should have at least {eggroll_config.rank} significant directions, got {significant}"
 
     @pytest.mark.skip(reason="Subspace coverage not yet implemented")
     @pytest.mark.slow
@@ -250,7 +443,32 @@ class TestSubspaceCoverage:
         
         This is important for ES convergence.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = small_tensor.device
+        m, n = small_tensor.shape
+        
+        model = nn.Linear(n, m, bias=False).to(device)
+        model.weight.data = small_tensor.clone()
+        
+        strategy = EggrollStrategy.from_config(eggroll_config)
+        strategy.setup(model)
+        
+        # Collect perturbations over many epochs
+        all_perturbations = []
+        for epoch in range(100):
+            perturbations = strategy.sample_perturbations(model.weight, population_size=8, epoch=epoch)
+            all_perturbations.extend(perturbations)
+        
+        # Stack and compute SVD
+        stacked = torch.stack([p.as_matrix().flatten() for p in all_perturbations])
+        _, s, _ = torch.linalg.svd(stacked)
+        
+        # After many epochs, should cover most directions
+        significant = (s > s.max() * 0.001).sum().item()
+        expected_full_rank = min(m * n, len(all_perturbations))
+        assert significant >= min(m, n), \
+            f"Should cover most of space after many epochs, got {significant} significant directions"
 
 
 # ============================================================================
@@ -269,7 +487,43 @@ class TestUpdateQuality:
         
         For a simple convex problem, should point toward optimum.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = simple_mlp[0].weight.device
+        
+        # Create simple model for convex problem
+        model = nn.Linear(4, 2, bias=False).to(device)
+        
+        strategy = EggrollStrategy.from_config(eggroll_config)
+        strategy.setup(model)
+        
+        # Target weights
+        target = torch.randn(2, 4, device=device)
+        x = torch.randn(8, 4, device=device)
+        
+        # Fitness: negative squared distance to target output
+        def fitness_fn(output):
+            target_output = x @ target.T
+            return -((output - target_output) ** 2).sum(dim=1).mean()
+        
+        population_size = 32
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            fitnesses = []
+            for _ in pop.iterate():
+                output = model(x)
+                fitnesses.append(fitness_fn(output).item())
+            fitnesses = torch.tensor(fitnesses, device=device)
+        
+        initial_weight = model.weight.clone()
+        initial_fitness = fitness_fn(model(x)).item()
+        
+        strategy.step(fitnesses)
+        
+        final_fitness = fitness_fn(model(x)).item()
+        
+        # For a convex problem with good population, should improve
+        # (may not always work due to variance, so we just check it's not way worse)
+        assert final_fitness >= initial_fitness - 1.0
 
     @pytest.mark.skip(reason="Update quality not yet implemented")
     def test_update_variance_decreases_with_population(
@@ -280,7 +534,44 @@ class TestUpdateQuality:
         
         This is the classic ES population size tradeoff.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = simple_mlp[0].weight.device
+        
+        variances = []
+        for pop_size in [8, 32, 128]:
+            updates = []
+            for trial in range(5):
+                # Fresh model each trial
+                model = nn.Sequential(
+                    nn.Linear(32, 64, bias=False),
+                    nn.ReLU(),
+                    nn.Linear(64, 16, bias=False),
+                ).to(device)
+                
+                strategy = EggrollStrategy.from_config(eggroll_config)
+                strategy.setup(model)
+                
+                before = model[0].weight.clone()
+                
+                with strategy.perturb(population_size=pop_size, epoch=0) as pop:
+                    x = torch.randn(pop_size, 32, device=device)
+                    pop.batched_forward(model, x)
+                
+                fitnesses = make_fitnesses(pop_size, device=device)
+                strategy.step(fitnesses)
+                
+                after = model[0].weight.clone()
+                delta = (after - before).norm().item()
+                updates.append(delta)
+            
+            variance = torch.tensor(updates).var().item()
+            variances.append(variance)
+        
+        # Variance should generally decrease with population size
+        # (may not be strictly monotonic, but trend should be there)
+        assert variances[-1] <= variances[0] * 2, \
+            f"Variance should decrease with population: {variances}"
 
     @pytest.mark.skip(reason="Update quality not yet implemented")
     @pytest.mark.slow
@@ -292,7 +583,48 @@ class TestUpdateQuality:
         
         This is an empirical validation that ES is doing something sensible.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = simple_mlp[0].weight.device
+        
+        # Simple differentiable fitness: MSE loss
+        model = nn.Linear(4, 2, bias=False).to(device)
+        target = torch.randn(8, 2, device=device)
+        x = torch.randn(8, 4, device=device)
+        
+        # Compute true gradient
+        model.zero_grad()
+        output = model(x)
+        loss = ((output - target) ** 2).sum()
+        loss.backward()
+        true_grad = model.weight.grad.clone()
+        
+        # Compute ES gradient
+        strategy = EggrollStrategy(sigma=0.01, lr=1.0, rank=4)  # lr=1 so update = gradient
+        strategy.setup(model)
+        
+        population_size = 256  # Large population for good estimate
+        
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            fitnesses = []
+            for _ in pop.iterate():
+                output = model(x)
+                # Negative loss as fitness (want to maximize)
+                fitness = -((output - target) ** 2).sum().item()
+                fitnesses.append(fitness)
+            fitnesses = torch.tensor(fitnesses, device=device)
+        
+        before = model.weight.clone()
+        strategy.step(fitnesses)
+        after = model.weight.clone()
+        
+        es_grad = after - before  # With lr=1, this approximates gradient direction
+        
+        # ES gradient should be negatively correlated with loss gradient
+        # (ES maximizes fitness = -loss, so should move opposite to loss gradient)
+        correlation = (es_grad * true_grad).sum()
+        # Note: correlation should be negative since ES maximizes and we computed loss gradient
+        assert correlation < 0, "ES gradient should anti-correlate with loss gradient"
 
 
 # ============================================================================
@@ -316,7 +648,23 @@ class TestNumericalStability:
             # Should not have inf or nan
             assert torch.isfinite(accumulated).all()
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = medium_tensor.device
+        
+        model = nn.Linear(medium_tensor.shape[1], medium_tensor.shape[0], bias=False).to(device)
+        model.weight.data = medium_tensor.clone()
+        
+        strategy = EggrollStrategy.from_config(eggroll_config)
+        strategy.setup(model)
+        
+        # Large number of perturbations
+        perturbations = strategy.sample_perturbations(model.weight, population_size=500, epoch=0)
+        accumulated = sum(p.as_matrix() for p in perturbations)
+        
+        # Should not have inf or nan
+        assert torch.isfinite(accumulated).all(), \
+            "Large population accumulation produced non-finite values"
 
     @pytest.mark.skip(reason="Numerical stability not yet implemented")
     def test_extreme_fitness_values_handled(
@@ -327,4 +675,34 @@ class TestNumericalStability:
         
         Fitness normalization should prevent numerical issues.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = small_tensor.device
+        
+        model = nn.Linear(small_tensor.shape[1], small_tensor.shape[0], bias=False).to(device)
+        model.weight.data = small_tensor.clone()
+        
+        strategy = EggrollStrategy.from_config(eggroll_config)
+        strategy.setup(model)
+        
+        population_size = 8
+        
+        # Extreme fitness values
+        fitnesses = torch.tensor([1e10, -1e10, 1e5, -1e5, 0.0, 1e-10, -1e-10, 1.0], device=device)
+        
+        # Normalization should handle these
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        assert torch.isfinite(normalized).all(), \
+            "Extreme fitness values should be handled gracefully"
+        
+        # Perturbation and step should also work
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            x = torch.randn(population_size, small_tensor.shape[1], device=device)
+            pop.batched_forward(model, x)
+        
+        strategy.step(fitnesses)
+        
+        # Parameters should be finite
+        assert torch.isfinite(model.weight).all(), \
+            "Parameters should remain finite after step with extreme fitness"

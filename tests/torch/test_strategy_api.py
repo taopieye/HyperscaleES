@@ -53,7 +53,13 @@ class TestGPURequirement:
             with pytest.raises(RuntimeError, match="CUDA|GPU"):
                 strategy.setup(model)  # Clear error about needing GPU
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        model = nn.Linear(10, 10).cpu()  # Explicitly on CPU
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        
+        with pytest.raises(RuntimeError, match="CUDA|GPU"):
+            strategy.setup(model)
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_setup_accepts_gpu_model(self, device):
@@ -65,7 +71,16 @@ class TestGPURequirement:
             strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
             strategy.setup(model)  # Works fine
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        model = nn.Linear(10, 10).to(device)
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        
+        # Should not raise
+        strategy.setup(model)
+        
+        # Strategy should have reference to model
+        assert strategy.model is model
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_error_message_is_helpful(self, device):
@@ -76,7 +91,20 @@ class TestGPURequirement:
         - Why EGGROLL needs a GPU (batched perturbations)
         - What they can do instead (Colab, different library, etc.)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        model = nn.Linear(10, 10).cpu()
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        
+        try:
+            strategy.setup(model)
+            pytest.fail("Expected RuntimeError")
+        except RuntimeError as e:
+            error_msg = str(e).lower()
+            # Error message should be helpful
+            assert any(word in error_msg for word in ["gpu", "cuda", "device"])
+            # Should mention why GPU is needed or what to do
+            assert len(str(e)) > 20  # Not just "GPU required"
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_rejects_model_moved_to_cpu_after_setup(self, device):
@@ -94,7 +122,19 @@ class TestGPURequirement:
                 with strategy.perturb(population_size=64, epoch=0) as pop:
                     pop.batched_forward(model, x)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        model = nn.Linear(10, 10).to(device)
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(model)
+        
+        # Move model to CPU after setup
+        model = model.cpu()
+        x = torch.randn(64, 10)
+        
+        with pytest.raises(RuntimeError, match="CUDA|GPU"):
+            with strategy.perturb(population_size=64, epoch=0) as pop:
+                pop.batched_forward(model, x)
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_rejects_cpu_input_tensors(self, device):
@@ -112,7 +152,17 @@ class TestGPURequirement:
                 with pytest.raises(RuntimeError, match="CUDA|GPU"):
                     pop.batched_forward(model, x_cpu)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        model = nn.Linear(10, 10).to(device)
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(model)
+        
+        x_cpu = torch.randn(64, 10)  # Forgot .cuda()
+        
+        with strategy.perturb(population_size=64, epoch=0) as pop:
+            with pytest.raises(RuntimeError, match="CUDA|GPU"):
+                pop.batched_forward(model, x_cpu)
 
 
 # ============================================================================
@@ -216,9 +266,22 @@ class TestStrategyInterface:
         """
         # Import will be from: hyperscalees.torch.strategies
         # from hyperscalees.torch import EggrollStrategy, OpenESStrategy
+        from hyperscalees.torch import EggrollStrategy, OpenESStrategy
         
-        # For now, just define what we expect
-        pass
+        strategy_classes = {
+            "eggroll": EggrollStrategy,
+            "open_es": OpenESStrategy,
+        }
+        
+        strategy_cls = strategy_classes[strategy_type]
+        
+        # Test instantiation with kwargs
+        strategy = strategy_cls(**config.__dict__)
+        assert strategy is not None
+        
+        # Test from_config class method
+        strategy_from_config = strategy_cls.from_config(config)
+        assert strategy_from_config is not None
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
@@ -232,7 +295,24 @@ class TestStrategyInterface:
             assert strategy.model is model
             assert len(list(strategy.parameters())) > 0
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy, OpenESStrategy
+        
+        strategy_classes = {
+            "eggroll": EggrollStrategy,
+            "open_es": OpenESStrategy,
+        }
+        
+        strategy_cls = strategy_classes[strategy_type]
+        strategy = strategy_cls(**config.__dict__)
+        
+        strategy.setup(simple_mlp)
+        
+        # Strategy should have reference to model
+        assert strategy.model is simple_mlp
+        
+        # Should have discovered parameters
+        params = list(strategy.parameters())
+        assert len(params) > 0
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
@@ -244,7 +324,29 @@ class TestStrategyInterface:
             with strategy.perturb(population_size=64, epoch=0) as pop:
                 outputs = pop.batched_forward(model, x_batch)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy, OpenESStrategy
+        
+        strategy_classes = {
+            "eggroll": EggrollStrategy,
+            "open_es": OpenESStrategy,
+        }
+        
+        device = simple_mlp[0].weight.device
+        strategy_cls = strategy_classes[strategy_type]
+        strategy = strategy_cls(**config.__dict__)
+        strategy.setup(simple_mlp)
+        
+        # perturb should return context manager
+        with strategy.perturb(population_size=8, epoch=0) as pop:
+            # Pop should have batched_forward method
+            assert hasattr(pop, "batched_forward")
+            assert hasattr(pop, "population_size")
+            assert pop.population_size == 8
+            
+            # Can call batched_forward
+            x = torch.randn(8, 32, device=device)
+            outputs = pop.batched_forward(simple_mlp, x)
+            assert outputs.shape[0] == 8
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
@@ -257,7 +359,41 @@ class TestStrategyInterface:
             metrics = strategy.step(fitnesses)
             assert "param_delta" in metrics
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy, OpenESStrategy
+        
+        strategy_classes = {
+            "eggroll": EggrollStrategy,
+            "open_es": OpenESStrategy,
+        }
+        
+        strategy_cls = strategy_classes[strategy_type]
+        strategy = strategy_cls(**config.__dict__)
+        strategy.setup(simple_mlp)
+        
+        # Get original parameters
+        original_params = {n: p.clone() for n, p in simple_mlp.named_parameters()}
+        
+        population_size = 8
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            x = torch.randn(population_size, 32, device=device)
+            outputs = pop.batched_forward(simple_mlp, x)
+        
+        # Generate fitnesses
+        fitnesses = make_fitnesses(population_size, device=device)
+        
+        # Step should update parameters
+        metrics = strategy.step(fitnesses)
+        
+        # Should return metrics dict
+        assert isinstance(metrics, dict)
+        
+        # Parameters should have changed
+        params_changed = False
+        for n, p in simple_mlp.named_parameters():
+            if not torch.equal(p, original_params[n]):
+                params_changed = True
+                break
+        assert params_changed, "Parameters should have been updated"
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
@@ -273,7 +409,39 @@ class TestStrategyInterface:
             new_strategy.setup(model)
             new_strategy.load_state_dict(torch.load("checkpoint.pt"))
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy, OpenESStrategy
+        
+        strategy_classes = {
+            "eggroll": EggrollStrategy,
+            "open_es": OpenESStrategy,
+        }
+        
+        device = simple_mlp[0].weight.device
+        strategy_cls = strategy_classes[strategy_type]
+        strategy = strategy_cls(**config.__dict__)
+        strategy.setup(simple_mlp)
+        
+        # Do a step to update internal state
+        population_size = 8
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            x = torch.randn(population_size, 32, device=device)
+            pop.batched_forward(simple_mlp, x)
+        
+        fitnesses = make_fitnesses(population_size, device=device)
+        strategy.step(fitnesses)
+        
+        # Get state dict
+        state = strategy.state_dict()
+        assert isinstance(state, dict)
+        
+        # Create new strategy and load state
+        new_strategy = strategy_cls(**config.__dict__)
+        new_strategy.setup(simple_mlp)
+        new_strategy.load_state_dict(state)
+        
+        # New strategy state should match
+        new_state = new_strategy.state_dict()
+        assert state.keys() == new_state.keys()
 
 
 # ============================================================================
@@ -293,7 +461,23 @@ class TestPerturbationContext:
                 assert pop.population_size == 8
                 outputs = pop.batched_forward(model, x_batch)  # Shape: (8, output_dim)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        population_size = 8
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            # Verify population_size attribute
+            assert pop.population_size == population_size
+            
+            # batched_forward should work
+            x = torch.randn(population_size, 32, device=device)
+            outputs = pop.batched_forward(simple_mlp, x)
+            
+            # Output should have shape (population_size, output_dim)
+            assert outputs.shape[0] == population_size
+            assert outputs.shape[1] == 16  # MLP output dim
 
     @pytest.mark.skip(reason="PerturbationContext not yet implemented")
     def test_context_provides_iterate_for_debugging(self, simple_mlp, device):
@@ -305,7 +489,27 @@ class TestPerturbationContext:
                 for member_id in pop.iterate():
                     output = model(x)  # Uses this member's perturbation
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        population_size = 8
+        x = torch.randn(1, 32, device=device)
+        outputs = []
+        
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            for member_id in pop.iterate():
+                output = simple_mlp(x)
+                outputs.append(output.clone())
+        
+        # Should have collected outputs for each member
+        assert len(outputs) == population_size
+        
+        # Each output should be different (different perturbations)
+        for i in range(population_size):
+            for j in range(i + 1, population_size):
+                assert not torch.allclose(outputs[i], outputs[j], rtol=1e-5)
 
     @pytest.mark.skip(reason="PerturbationContext not yet implemented")
     def test_context_restores_parameters_on_exit(self, simple_mlp, device):
@@ -322,7 +526,24 @@ class TestPerturbationContext:
             for n, p in model.named_parameters():
                 assert torch.equal(p, original_params[n])
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        # Store original parameters
+        original_params = {n: p.clone() for n, p in simple_mlp.named_parameters()}
+        
+        with strategy.perturb(population_size=8, epoch=0) as pop:
+            x = torch.randn(8, 32, device=device)
+            pop.batched_forward(simple_mlp, x)
+        
+        # Parameters should be restored after context exit
+        for n, p in simple_mlp.named_parameters():
+            assert_tensors_close(
+                p, original_params[n],
+                msg=f"Parameter {n} not restored after context exit"
+            )
 
     @pytest.mark.skip(reason="PerturbationContext not yet implemented")
     def test_nested_contexts_raise_error(self, simple_mlp, device):
@@ -335,7 +556,15 @@ class TestPerturbationContext:
                     with strategy.perturb(population_size=8):
                         pass
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        with strategy.perturb(population_size=8, epoch=0):
+            with pytest.raises(RuntimeError):
+                with strategy.perturb(population_size=8, epoch=0):
+                    pass
 
 
 # ============================================================================
@@ -359,7 +588,16 @@ class TestEvalMode:
             
             assert torch.equal(output1, output2)  # Deterministic
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        # Outside perturbation context, model should be deterministic
+        output1 = simple_mlp(batch_input_small)
+        output2 = simple_mlp(batch_input_small)
+        
+        assert torch.equal(output1, output2), "Model should be deterministic outside context"
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_eval_method_for_explicit_no_noise(self, simple_mlp, batch_input_small):
@@ -371,7 +609,17 @@ class TestEvalMode:
                 # Guaranteed no perturbation
                 output = model(x)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        # With explicit eval context
+        with strategy.eval():
+            output1 = simple_mlp(batch_input_small)
+            output2 = simple_mlp(batch_input_small)
+            
+            assert torch.equal(output1, output2), "Eval mode should be deterministic"
 
 
 # ============================================================================
@@ -390,7 +638,10 @@ class TestStrategyConfiguration:
             strategy = EggrollStrategy(sigma=0.1, lr=0.01)
             assert strategy.sigma == 0.1
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        assert strategy.sigma == 0.1
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_lr_is_readable(self):
@@ -401,7 +652,10 @@ class TestStrategyConfiguration:
             strategy = EggrollStrategy(sigma=0.1, lr=0.01)
             assert strategy.lr == 0.01
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        assert strategy.lr == 0.01
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_sigma_can_be_updated(self):
@@ -411,7 +665,14 @@ class TestStrategyConfiguration:
         TARGET API:
             strategy.sigma = 0.05  # Reduce noise over time
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        assert strategy.sigma == 0.1
+        
+        # Update sigma
+        strategy.sigma = 0.05
+        assert strategy.sigma == 0.05
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_lr_can_be_updated(self):
@@ -421,7 +682,14 @@ class TestStrategyConfiguration:
         TARGET API:
             strategy.lr = 0.005  # Decay learning rate
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        assert strategy.lr == 0.01
+        
+        # Update learning rate
+        strategy.lr = 0.005
+        assert strategy.lr == 0.005
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_from_config_classmethod(self):
@@ -432,7 +700,13 @@ class TestStrategyConfiguration:
             config = EggrollConfig(sigma=0.1, lr=0.01, rank=4)
             strategy = EggrollStrategy.from_config(config)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        config = EggrollConfig(sigma=0.1, lr=0.01, rank=4)
+        strategy = EggrollStrategy.from_config(config)
+        
+        assert strategy.sigma == config.sigma
+        assert strategy.lr == config.lr
 
 
 # ============================================================================
@@ -452,7 +726,20 @@ class TestParameterDiscovery:
             weights = list(strategy.weight_parameters())
             assert len(weights) == 3  # 3 Linear layers
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        # Should discover all weight matrices
+        weights = list(strategy.weight_parameters())
+        
+        # simple_mlp has 3 Linear layers with weights
+        assert len(weights) == 3, f"Expected 3 weight matrices, got {len(weights)}"
+        
+        # Each should be 2D
+        for w in weights:
+            assert w.dim() == 2, "Weight parameters should be 2D matrices"
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_discovers_all_biases(self, mlp_with_bias):
@@ -464,7 +751,20 @@ class TestParameterDiscovery:
             biases = list(strategy.bias_parameters())
             assert len(biases) == 2  # 2 layers with bias
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(mlp_with_bias)
+        
+        # Should discover all biases
+        biases = list(strategy.bias_parameters())
+        
+        # mlp_with_bias has 2 layers with bias=True
+        assert len(biases) == 2, f"Expected 2 bias vectors, got {len(biases)}"
+        
+        # Each should be 1D
+        for b in biases:
+            assert b.dim() == 1, "Bias parameters should be 1D vectors"
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_exclude_parameter_by_name(self, simple_mlp):
@@ -478,7 +778,19 @@ class TestParameterDiscovery:
             # Or at setup time:
             strategy.setup(model, exclude=["0.weight"])
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp, exclude=["0.weight"])
+        
+        # Get parameter names being evolved
+        param_names = [n for n, _ in strategy.named_parameters()]
+        
+        # First layer weight should be excluded
+        assert "0.weight" not in param_names
+        
+        # Other parameters should still be present
+        assert len(param_names) > 0
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_include_only_specific_parameters(self, simple_mlp):
@@ -489,7 +801,16 @@ class TestParameterDiscovery:
             strategy.setup(model, include=["2.weight", "4.weight"])
             # Only last two linear layers
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp, include=["2.weight", "4.weight"])
+        
+        # Get parameter names being evolved
+        param_names = [n for n, _ in strategy.named_parameters()]
+        
+        # Should only include specified parameters
+        assert set(param_names) == {"2.weight", "4.weight"}
 
 
 # ============================================================================
@@ -515,7 +836,32 @@ class TestCallbacks:
             
             assert len(metrics_history) == 1
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = simple_mlp[0].weight.device
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        # Track callbacks
+        metrics_history = []
+        
+        def on_step(metrics):
+            metrics_history.append(metrics)
+        
+        strategy.register_callback("on_step", on_step)
+        
+        # Do a step
+        population_size = 8
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            x = torch.randn(population_size, 32, device=device)
+            pop.batched_forward(simple_mlp, x)
+        
+        fitnesses = make_fitnesses(population_size, device=device)
+        strategy.step(fitnesses)
+        
+        # Callback should have been called
+        assert len(metrics_history) == 1
+        assert isinstance(metrics_history[0], dict)
 
     @pytest.mark.skip(reason="Callback system not yet implemented")
     def test_on_perturb_callback(self, simple_mlp):
@@ -530,7 +876,28 @@ class TestCallbacks:
             
             strategy.register_callback("on_perturb", on_perturb)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = simple_mlp[0].weight.device
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        # Track callbacks
+        perturbation_counts = [0]
+        
+        def on_perturb(population_size, epoch):
+            perturbation_counts[0] += population_size
+        
+        strategy.register_callback("on_perturb", on_perturb)
+        
+        # Do perturbation
+        population_size = 8
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            x = torch.randn(population_size, 32, device=device)
+            pop.batched_forward(simple_mlp, x)
+        
+        # Callback should have been called
+        assert perturbation_counts[0] == population_size
 
 
 # ============================================================================
@@ -552,14 +919,28 @@ class TestErrorHandling:
                 with strategy.perturb(population_size=8):
                     pass
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        
+        # Should raise because setup() not called
+        with pytest.raises(RuntimeError, match="setup"):
+            with strategy.perturb(population_size=8):
+                pass
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_step_before_setup_raises(self):
         """
         Calling step() before setup() should raise informative error.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        fitnesses = torch.randn(8)
+        
+        # Should raise because setup() not called
+        with pytest.raises(RuntimeError, match="setup"):
+            strategy.step(fitnesses)
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_step_with_wrong_fitness_size_raises(self, simple_mlp):
@@ -575,14 +956,42 @@ class TestErrorHandling:
             with pytest.raises(ValueError, match="population"):
                 strategy.step(wrong_fitnesses)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = simple_mlp[0].weight.device
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        population_size = 8
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            x = torch.randn(population_size, 32, device=device)
+            pop.batched_forward(simple_mlp, x)
+        
+        # Wrong fitness size
+        wrong_fitnesses = torch.randn(16, device=device)
+        
+        with pytest.raises(ValueError, match="population"):
+            strategy.step(wrong_fitnesses)
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_negative_population_size_raises(self, simple_mlp):
         """
         Population size must be positive.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
+        strategy.setup(simple_mlp)
+        
+        # Negative population size should raise
+        with pytest.raises(ValueError):
+            with strategy.perturb(population_size=-1):
+                pass
+        
+        # Zero population size should also raise
+        with pytest.raises(ValueError):
+            with strategy.perturb(population_size=0):
+                pass
 
     @pytest.mark.skip(reason="Strategy classes not yet implemented")  
     def test_odd_population_with_antithetic_warns(self, simple_mlp):
@@ -597,4 +1006,12 @@ class TestErrorHandling:
                 with strategy.perturb(population_size=7):  # Odd!
                     pass
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4, antithetic=True)
+        strategy.setup(simple_mlp)
+        
+        # Odd population size with antithetic should warn
+        with pytest.warns(UserWarning, match="antithetic"):
+            with strategy.perturb(population_size=7, epoch=0):
+                pass

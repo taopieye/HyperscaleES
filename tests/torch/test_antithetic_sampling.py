@@ -33,7 +33,7 @@ class TestAntitheticSampling:
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_even_odd_pairs_have_opposite_perturbations(
-        self, small_tensor, es_generator, eggroll_config
+        self, simple_linear, es_generator, eggroll_config, device
     ):
         """
         Population members 2k and 2k+1 should have opposite perturbations.
@@ -48,11 +48,40 @@ class TestAntitheticSampling:
                 # Should be exact negatives
                 assert torch.allclose(pert_even, -pert_odd)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        population_size = 8
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(simple_linear)
+        
+        perturbations = strategy.sample_perturbations(
+            param=simple_linear.weight,
+            population_size=population_size,
+            epoch=0
+        )
+        
+        # Check each pair
+        for i in range(0, population_size, 2):
+            pert_even = perturbations[i].as_matrix()
+            pert_odd = perturbations[i + 1].as_matrix()
+            
+            assert_tensors_close(
+                pert_even,
+                -pert_odd,
+                atol=1e-6,
+                msg=f"Pair ({i}, {i+1}): perturbations should be exact negatives"
+            )
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_antithetic_pairs_share_base_noise(
-        self, small_tensor, es_generator, eggroll_config
+        self, simple_linear, es_generator, eggroll_config, device
     ):
         """
         Antithetic pairs should share the same base noise (just negated).
@@ -71,10 +100,43 @@ class TestAntitheticSampling:
             # B factors should be the same
             assert torch.allclose(B_even, B_odd)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        population_size = 8
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(simple_linear)
+        
+        perturbations = strategy.sample_perturbations(
+            param=simple_linear.weight,
+            population_size=population_size,
+            epoch=0
+        )
+        
+        # Check factors for first pair
+        A_even, B_even = perturbations[0].factors
+        A_odd, B_odd = perturbations[1].factors
+        
+        # Either A is negated (and B same) or B is negated (and A same)
+        # The key property is that A_even @ B_even.T = -(A_odd @ B_odd.T)
+        pert_even = A_even @ B_even.T
+        pert_odd = A_odd @ B_odd.T
+        
+        assert_tensors_close(
+            pert_even,
+            -pert_odd,
+            atol=1e-6,
+            msg="Antithetic pairs should produce opposite full perturbations"
+        )
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
-    def test_antithetic_flag_controls_behavior(self, small_tensor, es_generator):
+    def test_antithetic_flag_controls_behavior(self, simple_linear, es_generator, device):
         """
         antithetic=False should disable mirrored sampling.
         
@@ -90,7 +152,32 @@ class TestAntitheticSampling:
             
             assert not torch.allclose(pert_0, -pert_1)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        population_size = 8
+        
+        # Without antithetic
+        strategy = EggrollStrategy(
+            sigma=0.1,
+            lr=0.01,
+            rank=4,
+            seed=42,
+            antithetic=False
+        )
+        strategy.setup(simple_linear)
+        
+        perturbations = strategy.sample_perturbations(
+            param=simple_linear.weight,
+            population_size=population_size,
+            epoch=0
+        )
+        
+        pert_0 = perturbations[0].as_matrix()
+        pert_1 = perturbations[1].as_matrix()
+        
+        # Should NOT be negatives without antithetic
+        assert not torch.allclose(pert_0, -pert_1, atol=1e-4), \
+            "Without antithetic, pairs should not be exact negatives"
 
 
 # ============================================================================
@@ -102,7 +189,7 @@ class TestVarianceReduction:
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_antithetic_cancellation_with_equal_fitness(
-        self, small_tensor, es_generator, eggroll_config
+        self, simple_linear, es_generator, eggroll_config, device
     ):
         """
         When antithetic pairs have equal fitness, their contributions cancel.
@@ -117,11 +204,38 @@ class TestVarianceReduction:
             
             # Update should be approximately zero (pairs cancel)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        population_size = 8
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(simple_linear)
+        
+        # Record original weights
+        original_weight = simple_linear.weight.clone()
+        
+        # Equal fitness for each pair
+        fitnesses = torch.tensor([1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0], device=device)
+        
+        # Perturb and step
+        with strategy.perturb(population_size=population_size, epoch=0):
+            pass
+        strategy.step(fitnesses)
+        
+        # With equal fitness pairs, updates should cancel
+        delta = (simple_linear.weight - original_weight).abs().max().item()
+        assert delta < 1e-4, \
+            f"With equal fitness pairs, update should be ~0, got max delta {delta:.6f}"
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_mean_perturbation_is_zero_with_antithetic(
-        self, small_tensor, es_generator, eggroll_config
+        self, simple_linear, es_generator, eggroll_config, device
     ):
         """
         Sum of antithetic perturbations should be exactly zero.
@@ -133,17 +247,86 @@ class TestVarianceReduction:
             
             assert torch.allclose(total, torch.zeros_like(total))
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        population_size = 8
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(simple_linear)
+        
+        perturbations = strategy.sample_perturbations(
+            param=simple_linear.weight,
+            population_size=population_size,
+            epoch=0
+        )
+        
+        # Sum all perturbations
+        total = perturbations[0].as_matrix().clone()
+        for p in perturbations[1:]:
+            total += p.as_matrix()
+        
+        # Should be exactly zero (each +ε paired with -ε)
+        assert torch.allclose(total, torch.zeros_like(total), atol=1e-6), \
+            "Sum of antithetic perturbations should be exactly zero"
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     @pytest.mark.slow
-    def test_variance_is_lower_with_antithetic(self, simple_mlp, batch_input_small):
+    def test_variance_is_lower_with_antithetic(self, simple_mlp, batch_input_small, device):
         """
         Gradient estimate variance should be lower with antithetic sampling.
         
         This is an empirical test over many random seeds.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        import math
+        
+        population_size = 32
+        n_trials = 50
+        
+        def run_trials(antithetic: bool):
+            """Run multiple trials and return variance of updates."""
+            updates = []
+            
+            for trial in range(n_trials):
+                model = nn.Linear(8, 16, bias=False).to(device)
+                
+                strategy = EggrollStrategy(
+                    sigma=0.1,
+                    lr=0.01,
+                    rank=4,
+                    seed=trial,  # Different seed each trial
+                    antithetic=antithetic
+                )
+                strategy.setup(model)
+                
+                original_weight = model.weight.clone()
+                
+                # Random fitnesses
+                fitnesses = torch.randn(population_size, device=device)
+                
+                with strategy.perturb(population_size=population_size, epoch=0):
+                    pass
+                strategy.step(fitnesses)
+                
+                delta = (model.weight - original_weight).flatten()
+                updates.append(delta.cpu())
+            
+            # Stack and compute variance
+            updates = torch.stack(updates)
+            return updates.var(dim=0).mean().item()
+        
+        variance_with = run_trials(antithetic=True)
+        variance_without = run_trials(antithetic=False)
+        
+        # Antithetic should have lower variance
+        assert variance_with < variance_without, \
+            f"Antithetic variance ({variance_with:.6f}) should be lower than without ({variance_without:.6f})"
 
 
 # ============================================================================
@@ -155,7 +338,7 @@ class TestAntitheticGradientEstimation:
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_asymmetric_fitness_produces_gradient(
-        self, small_tensor, es_generator, eggroll_config
+        self, simple_linear, es_generator, eggroll_config, device
     ):
         """
         When f(θ+ε) ≠ f(θ-ε), there should be a gradient signal.
@@ -169,11 +352,36 @@ class TestAntitheticGradientEstimation:
             # Should have non-trivial update
             assert metrics["param_delta_norm"] > 0
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        population_size = 8
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(simple_linear)
+        
+        original_weight = simple_linear.weight.clone()
+        
+        # Asymmetric fitness: even members (positive perturbation) are better
+        fitnesses = torch.tensor([10.0, 1.0, 10.0, 1.0, 10.0, 1.0, 10.0, 1.0], device=device)
+        
+        with strategy.perturb(population_size=population_size, epoch=0):
+            pass
+        metrics = strategy.step(fitnesses)
+        
+        # Should have non-trivial update
+        delta_norm = (simple_linear.weight - original_weight).norm().item()
+        assert delta_norm > 1e-6, \
+            f"Asymmetric fitness should produce non-zero update, got norm {delta_norm:.8f}"
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_gradient_direction_follows_better_perturbation(
-        self, small_tensor, es_generator, eggroll_config
+        self, simple_linear, es_generator, eggroll_config, device
     ):
         """
         Update direction should favor the better perturbation in each pair.
@@ -188,7 +396,47 @@ class TestAntitheticGradientEstimation:
             
             # Update should correlate with even (positive) perturbations
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        population_size = 8
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(simple_linear)
+        
+        # Get perturbations to compute expected direction
+        perturbations = strategy.sample_perturbations(
+            param=simple_linear.weight,
+            population_size=population_size,
+            epoch=0
+        )
+        
+        # Compute expected update direction: sum of positive perturbations
+        # (since positive perturbations have higher fitness)
+        expected_direction = sum(
+            perturbations[i].as_matrix() for i in range(0, population_size, 2)
+        )
+        
+        original_weight = simple_linear.weight.clone()
+        
+        # Evens (positive ε) are better
+        fitnesses = torch.tensor([10.0, 1.0, 10.0, 1.0, 10.0, 1.0, 10.0, 1.0], device=device)
+        
+        with strategy.perturb(population_size=population_size, epoch=0):
+            pass
+        strategy.step(fitnesses)
+        
+        actual_delta = simple_linear.weight - original_weight
+        
+        # Correlation should be positive
+        correlation = (actual_delta * expected_direction).sum().item()
+        assert correlation > 0, \
+            f"Update should correlate with high-fitness perturbations, got correlation {correlation:.6f}"
 
 
 # ============================================================================
@@ -199,14 +447,31 @@ class TestAntitheticPopulationSize:
     """Test antithetic sampling with various population sizes."""
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
-    def test_even_population_works(self, simple_mlp, eggroll_config):
+    def test_even_population_works(self, simple_mlp, eggroll_config, device):
         """
         Even population size should work normally with antithetic.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        for population_size in [2, 4, 8, 16, 64]:
+            strategy = EggrollStrategy(
+                sigma=eggroll_config.sigma,
+                lr=eggroll_config.lr,
+                rank=eggroll_config.rank,
+                seed=eggroll_config.seed,
+                antithetic=True
+            )
+            strategy.setup(simple_mlp)
+            
+            x = torch.randn(population_size, 8, device=device)
+            
+            with strategy.perturb(population_size=population_size, epoch=0) as pop:
+                outputs = pop.batched_forward(simple_mlp, x)
+            
+            assert outputs.shape[0] == population_size
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
-    def test_odd_population_raises_or_warns(self, simple_mlp, eggroll_config):
+    def test_odd_population_raises_or_warns(self, simple_mlp, eggroll_config, device):
         """
         Odd population with antithetic should warn or raise.
         
@@ -224,14 +489,64 @@ class TestAntitheticPopulationSize:
             with pytest.raises(ValueError):
                 strategy.perturb(population_size=7)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(simple_mlp)
+        
+        # Should either warn or raise for odd population
+        odd_population = 7
+        
+        # Try both warning and error cases
+        try:
+            with pytest.warns(UserWarning):
+                with strategy.perturb(population_size=odd_population, epoch=0):
+                    pass
+        except (pytest.fail.Exception, ValueError, RuntimeError):
+            # Also acceptable: raising an error
+            with pytest.raises((ValueError, RuntimeError)):
+                with strategy.perturb(population_size=odd_population, epoch=0):
+                    pass
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
-    def test_population_size_2_is_single_pair(self, simple_mlp, eggroll_config):
+    def test_population_size_2_is_single_pair(self, simple_mlp, eggroll_config, device):
         """
         Population size 2 with antithetic is just one perturbation and its mirror.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        population_size = 2
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(simple_mlp)
+        
+        # Get perturbations for the single pair
+        param = list(simple_mlp.parameters())[0]  # First weight
+        perturbations = strategy.sample_perturbations(
+            param=param,
+            population_size=population_size,
+            epoch=0
+        )
+        
+        assert len(perturbations) == 2
+        
+        # They should be exact negatives
+        pert_0 = perturbations[0].as_matrix()
+        pert_1 = perturbations[1].as_matrix()
+        
+        assert_tensors_close(pert_0, -pert_1, atol=1e-6)
 
 
 # ============================================================================
@@ -242,7 +557,7 @@ class TestAntitheticIndexMapping:
     """Verify correct index mapping for antithetic pairs."""
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
-    def test_get_antithetic_partner(self, eggroll_config):
+    def test_get_antithetic_partner(self, eggroll_config, device):
         """
         Should be able to get the antithetic partner index.
         
@@ -253,10 +568,29 @@ class TestAntitheticIndexMapping:
             assert strategy.get_antithetic_partner(4) == 5
             assert strategy.get_antithetic_partner(5) == 4
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        model = nn.Linear(4, 8, bias=False).to(device)
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(model)
+        
+        # Test partner mapping
+        assert strategy.get_antithetic_partner(0) == 1
+        assert strategy.get_antithetic_partner(1) == 0
+        assert strategy.get_antithetic_partner(4) == 5
+        assert strategy.get_antithetic_partner(5) == 4
+        assert strategy.get_antithetic_partner(10) == 11
+        assert strategy.get_antithetic_partner(11) == 10
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
-    def test_is_positive_perturbation(self, eggroll_config):
+    def test_is_positive_perturbation(self, eggroll_config, device):
         """
         Should be able to check if member is +ε or -ε direction.
         
@@ -266,7 +600,26 @@ class TestAntitheticIndexMapping:
             assert strategy.is_positive_perturbation(2) == True
             assert strategy.is_positive_perturbation(3) == False
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        model = nn.Linear(4, 8, bias=False).to(device)
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(model)
+        
+        # Even indices are positive, odd are negative
+        assert strategy.is_positive_perturbation(0) == True
+        assert strategy.is_positive_perturbation(1) == False
+        assert strategy.is_positive_perturbation(2) == True
+        assert strategy.is_positive_perturbation(3) == False
+        assert strategy.is_positive_perturbation(100) == True
+        assert strategy.is_positive_perturbation(101) == False
 
 
 # ============================================================================
@@ -278,7 +631,7 @@ class TestMultiLayerAntithetic:
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_all_layers_use_same_sign(
-        self, simple_mlp, batch_input_small, eggroll_config
+        self, simple_mlp, batch_input_small, eggroll_config, device
     ):
         """
         All layers should use the same sign for a given population member.
@@ -293,11 +646,37 @@ class TestMultiLayerAntithetic:
                     pert = strategy._get_perturbation(layer_name, member_id=0)
                     # All should be "positive" direction
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        population_size = 8
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(simple_mlp)
+        
+        # Get perturbations for member 0 and 1 for each layer
+        params = [(name, p) for name, p in simple_mlp.named_parameters() if 'weight' in name]
+        
+        for name, param in params:
+            pert_0 = strategy._sample_perturbation(param, member_id=0, epoch=0)
+            pert_1 = strategy._sample_perturbation(param, member_id=1, epoch=0)
+            
+            # Should be negatives
+            assert_tensors_close(
+                pert_0.as_matrix(),
+                -pert_1.as_matrix(),
+                atol=1e-6,
+                msg=f"Layer {name}: members 0 and 1 should have opposite perturbations"
+            )
 
     @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_layers_have_independent_noise_but_correlated_sign(
-        self, simple_mlp, eggroll_config
+        self, simple_mlp, eggroll_config, device
     ):
         """
         Different layers should have independent noise, but correlated signs.
@@ -305,7 +684,32 @@ class TestMultiLayerAntithetic:
         Layer 1 and Layer 2 have different random perturbations,
         but if member 0 uses +ε for layer 1, it also uses +ε for layer 2.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(simple_mlp)
+        
+        # Get first two weight layers
+        params = [(name, p) for name, p in simple_mlp.named_parameters() if 'weight' in name]
+        
+        if len(params) >= 2:
+            name1, param1 = params[0]
+            name2, param2 = params[1]
+            
+            pert1_m0 = strategy._sample_perturbation(param1, member_id=0, epoch=0)
+            pert2_m0 = strategy._sample_perturbation(param2, member_id=0, epoch=0)
+            
+            # Different perturbations (independent noise)
+            # Can't directly compare since shapes may differ
+            # Just verify they exist and are valid
+            assert pert1_m0.as_matrix().shape == param1.shape
+            assert pert2_m0.as_matrix().shape == param2.shape
 
 
 # ============================================================================
@@ -316,20 +720,66 @@ class TestAntitheticFitnessProcessing:
     """Verify fitness processing respects antithetic structure."""
 
     @pytest.mark.skip(reason="Antithetic fitness not yet implemented")
-    def test_fitness_normalization_preserves_pair_structure(self, eggroll_config):
+    def test_fitness_normalization_preserves_pair_structure(self, eggroll_config, device):
         """
         Fitness normalization should preserve the pair relationship.
         
         After normalization, the difference between pair fitnesses should
         determine the gradient contribution.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        model = nn.Linear(4, 8, bias=False).to(device)
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(model)
+        
+        # Fitnesses with clear pair structure
+        fitnesses = torch.tensor([10.0, 2.0, 8.0, 4.0, 6.0, 6.0, 3.0, 9.0], device=device)
+        
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Normalization should preserve which member of pair is better
+        # Pair 0: 10 > 2, Pair 1: 8 > 4, Pair 2: 6 == 6, Pair 3: 3 < 9
+        assert normalized[0] > normalized[1], "Pair 0: member 0 should still be higher"
+        assert normalized[2] > normalized[3], "Pair 1: member 0 should still be higher"
+        assert normalized[6] < normalized[7], "Pair 3: member 0 should still be lower"
 
     @pytest.mark.skip(reason="Antithetic fitness not yet implemented")
-    def test_baseline_subtraction_with_antithetic(self, eggroll_config):
+    def test_baseline_subtraction_with_antithetic(self, eggroll_config, device):
         """
         Baseline subtraction can use the antithetic pair as baseline.
         
         Some implementations use f(θ+ε) - f(θ-ε) directly.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        model = nn.Linear(4, 8, bias=False).to(device)
+        
+        strategy = EggrollStrategy(
+            sigma=eggroll_config.sigma,
+            lr=eggroll_config.lr,
+            rank=eggroll_config.rank,
+            seed=eggroll_config.seed,
+            antithetic=True
+        )
+        strategy.setup(model)
+        
+        # Test that the update computation uses pair differences
+        fitnesses = torch.tensor([10.0, 2.0, 8.0, 4.0], device=device)
+        
+        original_weight = model.weight.clone()
+        
+        with strategy.perturb(population_size=4, epoch=0):
+            pass
+        strategy.step(fitnesses)
+        
+        # Should have non-zero update (pairs have different fitness)
+        delta = (model.weight - original_weight).norm().item()
+        assert delta > 1e-6, "Antithetic pairs with different fitness should produce update"

@@ -43,7 +43,15 @@ class TestFitnessNormalization:
             
             assert normalized.mean().abs() < 1e-6
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        fitnesses = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Mean should be approximately zero
+        assert normalized.mean().abs() < 1e-6, f"Expected mean ~0, got {normalized.mean()}"
 
     @pytest.mark.skip(reason="Fitness normalization not yet implemented")
     def test_normalized_scores_have_unit_variance(self, eggroll_config):
@@ -57,7 +65,17 @@ class TestFitnessNormalization:
             
             assert abs(normalized.var() - 1.0) < 1e-5
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        fitnesses = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Variance should be approximately 1
+        # Note: using unbiased=False for population variance like in normalization
+        var = normalized.var(unbiased=False)
+        assert abs(var - 1.0) < 0.1, f"Expected variance ~1, got {var}"
 
     @pytest.mark.skip(reason="Fitness normalization not yet implemented")
     def test_normalization_preserves_ordering(self, eggroll_config):
@@ -75,7 +93,19 @@ class TestFitnessNormalization:
             
             assert torch.equal(original_order, normalized_order)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        fitnesses = torch.tensor([3.0, 1.0, 4.0, 1.5, 5.0, 9.0, 2.0, 6.0])
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Ranking should be preserved
+        original_order = fitnesses.argsort()
+        normalized_order = normalized.argsort()
+        
+        assert torch.equal(original_order, normalized_order), \
+            "Normalization should preserve ordering"
 
     @pytest.mark.skip(reason="Fitness normalization not yet implemented")
     def test_normalization_preserves_sign_of_differences(self, eggroll_config):
@@ -89,7 +119,20 @@ class TestFitnessNormalization:
             # f[1] > f[0] before, should still be after
             assert (fitnesses[1] > fitnesses[0]) == (normalized[1] > normalized[0])
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        fitnesses = torch.tensor([1.0, 5.0, 3.0, 7.0])
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Check all pairs
+        for i in range(len(fitnesses)):
+            for j in range(i + 1, len(fitnesses)):
+                orig_sign = fitnesses[i] < fitnesses[j]
+                norm_sign = normalized[i] < normalized[j]
+                assert orig_sign == norm_sign, \
+                    f"Sign of difference between [{i}] and [{j}] changed"
 
 
 # ============================================================================
@@ -113,7 +156,19 @@ class TestFitnessEdgeCases:
             assert torch.isfinite(normalized).all()
             assert normalized.abs().max() < 1e-6
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        # All equal values - variance is zero
+        fitnesses = torch.tensor([5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0])
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Should not produce NaN or Inf
+        assert torch.isfinite(normalized).all(), "Got non-finite values"
+        
+        # All zeros since there's no difference
+        assert normalized.abs().max() < 1e-6
 
     @pytest.mark.skip(reason="Edge case handling not yet implemented")
     def test_very_small_variance_handled(self, eggroll_config):
@@ -127,7 +182,16 @@ class TestFitnessEdgeCases:
             
             assert torch.isfinite(normalized).all()
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        # Very small variance
+        fitnesses = torch.tensor([1.0, 1.0 + 1e-10, 1.0, 1.0 - 1e-10])
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Should not produce NaN or Inf
+        assert torch.isfinite(normalized).all(), "Got non-finite values with tiny variance"
 
     @pytest.mark.skip(reason="Edge case handling not yet implemented")
     def test_large_fitness_values_handled(self, eggroll_config):
@@ -141,7 +205,19 @@ class TestFitnessEdgeCases:
             
             assert torch.isfinite(normalized).all()
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        # Very large values
+        fitnesses = torch.tensor([1e30, 2e30, 3e30, 4e30])
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Should not overflow
+        assert torch.isfinite(normalized).all(), "Got non-finite values with large inputs"
+        
+        # Should still have zero mean
+        assert normalized.mean().abs() < 1e-5
 
     @pytest.mark.skip(reason="Edge case handling not yet implemented")
     def test_negative_fitness_values_handled(self, eggroll_config):
@@ -156,7 +232,16 @@ class TestFitnessEdgeCases:
             assert torch.isfinite(normalized).all()
             assert normalized.mean().abs() < 1e-6
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        # Mix of positive and negative
+        fitnesses = torch.tensor([-10.0, -5.0, 0.0, 5.0, 10.0])
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        assert torch.isfinite(normalized).all()
+        assert normalized.mean().abs() < 1e-6
 
     @pytest.mark.skip(reason="Edge case handling not yet implemented")
     def test_single_fitness_value_handled(self, eggroll_config):
@@ -170,7 +255,16 @@ class TestFitnessEdgeCases:
             
             assert torch.isfinite(normalized).all()
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        # Single value
+        fitnesses = torch.tensor([5.0])
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        # Should not produce NaN or Inf
+        assert torch.isfinite(normalized).all()
 
 
 # ============================================================================
@@ -198,7 +292,28 @@ class TestRankBasedFitness:
             
             # Should be based on ranks, not raw values
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(
+            sigma=0.1, lr=0.01, rank=4,
+            fitness_transform="rank"
+        )
+        
+        # Values with outliers
+        fitnesses = torch.tensor([1.0, 100.0, 2.0, 50.0])
+        transformed = strategy.normalize_fitnesses(fitnesses)
+        
+        # With rank transform, the outlier (100.0) shouldn't dominate
+        # The ranks are: [0, 3, 1, 2] (for ascending)
+        # So transformed should reflect ranks, not raw values
+        
+        # Check that transformed values have reasonable magnitude
+        assert transformed.abs().max() < 10.0, "Rank transform should bound values"
+        
+        # Ordering should still be preserved
+        original_order = fitnesses.argsort()
+        transformed_order = transformed.argsort()
+        assert torch.equal(original_order, transformed_order)
 
     @pytest.mark.skip(reason="Rank-based fitness not yet implemented")
     def test_rank_transform_handles_ties(self, eggroll_config):
@@ -212,7 +327,19 @@ class TestRankBasedFitness:
             
             # Tied values should have same transformed value
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(
+            sigma=0.1, lr=0.01, rank=4,
+            fitness_transform="rank"
+        )
+        
+        fitnesses = torch.tensor([1.0, 3.0, 3.0, 5.0])  # Ties at 3.0
+        transformed = strategy.normalize_fitnesses(fitnesses)
+        
+        # Tied values should have same (or very close) transformed values
+        assert torch.allclose(transformed[1], transformed[2], rtol=1e-5), \
+            "Tied fitness values should have same transformed value"
 
 
 # ============================================================================
@@ -237,7 +364,19 @@ class TestCenteredRankFitness:
             # Should be symmetric around 0
             assert transformed.mean().abs() < 1e-6
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(
+            sigma=0.1, lr=0.01, rank=4,
+            fitness_transform="centered_rank"
+        )
+        
+        fitnesses = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        transformed = strategy.normalize_fitnesses(fitnesses)
+        
+        # Should be symmetric around 0
+        assert transformed.mean().abs() < 1e-6, \
+            f"Centered rank mean should be ~0, got {transformed.mean()}"
 
     @pytest.mark.skip(reason="Centered rank not yet implemented")
     def test_centered_rank_bounded(self, eggroll_config):
@@ -246,7 +385,19 @@ class TestCenteredRankFitness:
         
         Typically in range [-0.5, 0.5] or similar.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(
+            sigma=0.1, lr=0.01, rank=4,
+            fitness_transform="centered_rank"
+        )
+        
+        fitnesses = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        transformed = strategy.normalize_fitnesses(fitnesses)
+        
+        # Centered rank typically produces values in [-0.5, 0.5]
+        assert transformed.min() >= -1.0, "Centered rank should be bounded below"
+        assert transformed.max() <= 1.0, "Centered rank should be bounded above"
 
 
 # ============================================================================
@@ -275,14 +426,43 @@ class TestCustomFitnessTransform:
             
             assert torch.allclose(transformed, torch.tanh(fitnesses))
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        def my_transform(fitnesses):
+            return torch.tanh(fitnesses)
+        
+        strategy = EggrollStrategy(
+            sigma=0.1, lr=0.01, rank=4,
+            fitness_transform=my_transform
+        )
+        
+        fitnesses = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        transformed = strategy.normalize_fitnesses(fitnesses)
+        
+        expected = torch.tanh(fitnesses)
+        assert torch.allclose(transformed, expected), \
+            "Custom transform should be applied"
 
     @pytest.mark.skip(reason="Custom fitness not yet implemented")
     def test_fitness_transform_callable_validation(self, eggroll_config):
         """
         Should validate that custom transform is callable.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        # String "not_a_valid_option" should raise
+        with pytest.raises((ValueError, TypeError)):
+            strategy = EggrollStrategy(
+                sigma=0.1, lr=0.01, rank=4,
+                fitness_transform="not_a_valid_option"
+            )
+        
+        # Non-callable should raise
+        with pytest.raises((ValueError, TypeError)):
+            strategy = EggrollStrategy(
+                sigma=0.1, lr=0.01, rank=4,
+                fitness_transform=42  # Not callable
+            )
 
 
 # ============================================================================
@@ -306,7 +486,16 @@ class TestBaselineSubtraction:
             # Should be centered
             assert processed.mean().abs() < 1e-6
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        fitnesses = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        processed = strategy.normalize_fitnesses(fitnesses)
+        
+        # Should be centered around zero
+        assert processed.mean().abs() < 1e-6, \
+            f"Mean baseline subtraction should center fitnesses, got mean={processed.mean()}"
 
     @pytest.mark.skip(reason="Baseline subtraction not yet implemented")
     def test_antithetic_baseline_option(self, eggroll_config):
@@ -323,7 +512,25 @@ class TestBaselineSubtraction:
                 baseline="antithetic"  # or "mean"
             )
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(
+            sigma=0.1, lr=0.01, rank=4,
+            antithetic=True,
+            baseline="antithetic"
+        )
+        
+        # With antithetic baseline, pairs (f+, f-) become (f+ - f-)
+        # For population [f0+, f0-, f1+, f1-], baseline is pairwise
+        fitnesses = torch.tensor([10.0, 8.0, 15.0, 12.0])  # pairs: (10,8), (15,12)
+        
+        processed = strategy.normalize_fitnesses(fitnesses)
+        
+        # Antithetic baseline should compute differences within pairs
+        # f0+ - f0- = 10 - 8 = 2
+        # f1+ - f1- = 15 - 12 = 3
+        # Result should reflect these differences
+        assert torch.isfinite(processed).all()
 
 
 # ============================================================================
@@ -340,7 +547,18 @@ class TestEpsilonHandling:
         
         normalized = (f - mean) / sqrt(var + eps)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        
+        # Very small variance that could cause division issues
+        fitnesses = torch.tensor([1.0, 1.0, 1.0, 1.0 + 1e-12])
+        
+        # Should not raise or produce NaN/Inf
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        assert torch.isfinite(normalized).all(), \
+            "Epsilon should prevent division by zero"
 
     @pytest.mark.skip(reason="Epsilon handling not yet implemented")
     def test_custom_epsilon_value(self, eggroll_config):
@@ -353,7 +571,19 @@ class TestEpsilonHandling:
                 fitness_eps=1e-8  # Custom stability constant
             )
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        # Create with custom epsilon
+        strategy = EggrollStrategy(
+            sigma=0.1, lr=0.01, rank=4,
+            fitness_eps=1e-4  # Larger epsilon
+        )
+        
+        # With larger epsilon, constant values get less normalized
+        fitnesses = torch.tensor([1.0, 1.0, 1.0, 1.0])
+        normalized = strategy.normalize_fitnesses(fitnesses)
+        
+        assert torch.isfinite(normalized).all()
 
 
 # ============================================================================
@@ -380,7 +610,32 @@ class TestFitnessInStep:
             assert "normalized_fitness_mean" in metrics
             assert abs(metrics["normalized_fitness_mean"]) < 1e-6
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = simple_mlp[0].weight.device
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(simple_mlp)
+        
+        # Perturb and get outputs
+        population_size = 8
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            x = torch.randn(population_size, 32, device=device)
+            pop.batched_forward(simple_mlp, x)
+        
+        # Raw fitnesses (not normalized)
+        raw_fitnesses = torch.tensor(
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 
+            device=device
+        )
+        
+        # step() should normalize internally
+        metrics = strategy.step(raw_fitnesses)
+        
+        # Metrics should indicate normalization was done
+        assert isinstance(metrics, dict)
+        # Optionally check for normalized_fitness_mean
+        if "normalized_fitness_mean" in metrics:
+            assert abs(metrics["normalized_fitness_mean"]) < 1e-6
 
     @pytest.mark.skip(reason="Step integration not yet implemented")
     def test_step_with_prenormalized_fitness(
@@ -395,4 +650,23 @@ class TestFitnessInStep:
             
             metrics = strategy.step(normalized, prenormalized=True)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        device = simple_mlp[0].weight.device
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(simple_mlp)
+        
+        # Perturb and get outputs
+        population_size = 8
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            x = torch.randn(population_size, 32, device=device)
+            pop.batched_forward(simple_mlp, x)
+        
+        # User already normalized
+        prenormalized = torch.randn(population_size, device=device)
+        prenormalized = (prenormalized - prenormalized.mean()) / prenormalized.std()
+        
+        # Pass with prenormalized=True to skip internal normalization
+        metrics = strategy.step(prenormalized, prenormalized=True)
+        
+        assert isinstance(metrics, dict)

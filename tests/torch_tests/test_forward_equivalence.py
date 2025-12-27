@@ -209,6 +209,8 @@ class TestForwardDeterminism:
     ):
         """
         Different epochs should produce different perturbations.
+        
+        Note: Requires noise_reuse >= 1 (noise_reuse=0 means same noise every epoch).
         """
         from hyperscalees.torch import EggrollStrategy
         
@@ -219,7 +221,8 @@ class TestForwardDeterminism:
             sigma=eggroll_config.sigma,
             lr=eggroll_config.lr,
             rank=eggroll_config.rank,
-            seed=eggroll_config.seed
+            seed=eggroll_config.seed,
+            noise_reuse=1  # Different noise each epoch
         )
         strategy.setup(simple_mlp)
         

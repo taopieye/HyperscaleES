@@ -226,7 +226,7 @@ class TestLearningRate:
             
             population_size = 8
             with strategy.perturb(population_size=population_size, epoch=0) as pop:
-                x = torch.randn(population_size, 8, device=device)
+                x = torch.randn(population_size, 32, device=device)  # Match model input dim
                 pop.batched_forward(model, x)
             
             fitnesses = torch.randn(population_size, device=device)
@@ -314,7 +314,7 @@ class TestSigmaInUpdate:
             
             population_size = 8
             with strategy.perturb(population_size=population_size, epoch=0) as pop:
-                x = torch.randn(population_size, 8, device=device)
+                x = torch.randn(population_size, 32, device=device)  # Match model input dim
                 pop.batched_forward(model, x)
             
             fitnesses = torch.randn(population_size, device=device)

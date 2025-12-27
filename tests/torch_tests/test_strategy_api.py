@@ -466,7 +466,7 @@ class TestPerturbationContext:
             
             # Output should have shape (population_size, output_dim)
             assert outputs.shape[0] == population_size
-            assert outputs.shape[1] == 16  # MLP output dim
+            assert outputs.shape[1] == 2  # simple_mlp output dim is 2
 
     def test_context_provides_iterate_for_debugging(self, simple_mlp, device):
         """

@@ -50,6 +50,9 @@ class BaseStrategy(ABC):
     All ES implementations must conform to this interface.
     """
     
+    # Valid string values for fitness_transform
+    VALID_FITNESS_TRANSFORMS = {"rank", "centered_rank", None}
+    
     def __init__(
         self,
         sigma: float = 0.1,
@@ -59,9 +62,11 @@ class BaseStrategy(ABC):
         optimizer: Union[str, type] = "sgd",
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
-        fitness_transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+        fitness_transform: Optional[Union[str, Callable[[torch.Tensor], torch.Tensor]]] = None,
         grad_clip: Optional[float] = None,
+        max_grad_norm: Optional[float] = None,  # Alias for grad_clip
         freeze_bias: bool = False,
+        evolve_bias: bool = True,  # Alias: evolve_bias=False is same as freeze_bias=True
         **kwargs
     ):
         self._sigma = sigma
@@ -71,9 +76,21 @@ class BaseStrategy(ABC):
         self._optimizer_type = optimizer
         self._optimizer_kwargs = optimizer_kwargs or {}
         self._seed = seed or 42
+        # Handle both grad_clip and max_grad_norm parameter names
+        self._grad_clip = grad_clip or max_grad_norm
+        # Handle both freeze_bias=True and evolve_bias=False
+        self._freeze_bias = freeze_bias or (not evolve_bias)
+        
+        # Validate and store fitness transform
+        if fitness_transform is not None:
+            if isinstance(fitness_transform, str):
+                if fitness_transform not in {"rank", "centered_rank"}:
+                    raise ValueError(f"Unknown fitness_transform: {fitness_transform}. "
+                                   f"Valid string values: 'rank', 'centered_rank'")
+            elif not callable(fitness_transform):
+                raise TypeError(f"fitness_transform must be a string, callable, or None, "
+                              f"got {type(fitness_transform)}")
         self._fitness_transform = fitness_transform
-        self._grad_clip = grad_clip
-        self._freeze_bias = freeze_bias
         
         self._model: Optional[nn.Module] = None
         self._optimizer: Optional[torch.optim.Optimizer] = None
@@ -156,11 +173,33 @@ class BaseStrategy(ABC):
     def _trigger_callbacks(self, event: str, **kwargs) -> None:
         """Trigger all callbacks for an event."""
         for callback in self._callbacks.get(event, []):
-            # Try to call with kwargs, fall back to no args for simple callbacks
-            try:
-                callback(**kwargs)
-            except TypeError:
-                callback()
+            # Different events have different expected signatures
+            if event == 'on_step':
+                # on_step callbacks expect metrics as positional arg
+                try:
+                    callback(kwargs.get('metrics', {}))
+                except TypeError:
+                    # Fall back to no args
+                    try:
+                        callback()
+                    except TypeError:
+                        # Try with kwargs
+                        callback(**kwargs)
+            elif event == 'on_perturb':
+                # on_perturb callbacks expect (population_size, epoch)
+                try:
+                    callback(kwargs.get('population_size'), kwargs.get('epoch'))
+                except TypeError:
+                    try:
+                        callback(**kwargs)
+                    except TypeError:
+                        callback()
+            else:
+                # Generic: try kwargs first, fall back to no args
+                try:
+                    callback(**kwargs)
+                except TypeError:
+                    callback()
     
     def get_antithetic_partner(self, member_id: int) -> int:
         """
@@ -460,14 +499,42 @@ class BaseStrategy(ABC):
     
     def normalize_fitnesses(self, fitnesses: torch.Tensor) -> torch.Tensor:
         """
-        Normalize fitness scores to have zero mean and unit variance.
+        Normalize fitness scores based on the configured transform.
+        
+        If fitness_transform is:
+        - None: Standard normalization (zero mean, unit variance)
+        - "rank": Rank-based transformation
+        - "centered_rank": Centered rank transformation (symmetric around 0)
+        - callable: Apply the custom function directly (no further normalization)
         
         Args:
             fitnesses: Raw fitness scores, shape (population_size,)
         
         Returns:
-            Normalized fitness scores
+            Transformed/normalized fitness scores
         """
+        # Handle string transforms
+        if isinstance(self._fitness_transform, str):
+            if self._fitness_transform == "rank":
+                # Rank transformation: convert to ranks, then normalize
+                ranks = torch.argsort(torch.argsort(fitnesses)).float()
+                # Normalize ranks to [0, 1] then center
+                n = len(fitnesses)
+                normalized_ranks = ranks / (n - 1) if n > 1 else torch.zeros_like(ranks)
+                return normalized_ranks - normalized_ranks.mean()
+            elif self._fitness_transform == "centered_rank":
+                # Centered rank: ranks centered around 0, bounded
+                ranks = torch.argsort(torch.argsort(fitnesses)).float()
+                n = len(fitnesses)
+                # Map to [-0.5, 0.5] range
+                centered = (ranks - (n - 1) / 2) / n
+                return centered
+        
+        # Handle custom callable - apply directly, no further normalization
+        if callable(self._fitness_transform):
+            return self._fitness_transform(fitnesses)
+        
+        # Default: standard normalization (zero mean, unit variance)
         mean = fitnesses.mean()
         var = fitnesses.var(unbiased=False)
         

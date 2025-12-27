@@ -160,25 +160,29 @@ class TestParameterDiscovery:
         assert bias_count == expected, \
             f"Expected {expected} biases, found {bias_count}"
 
-    def test_respects_requires_grad(self, simple_mlp, eggroll_config):
+    def test_respects_requires_grad(self, device, eggroll_config):
         """
         Should only evolve parameters with requires_grad=True.
         """
         from hyperscalees.torch import EggrollStrategy
         
+        # Create a fresh model to avoid any state issues
+        model = nn.Sequential(
+            nn.Linear(8, 16),
+            nn.ReLU(),
+            nn.Linear(16, 2)
+        ).to(device)
+        
         # Freeze first layer
-        simple_mlp[0].weight.requires_grad = False
+        model[0].weight.requires_grad = False
         
         strategy = EggrollStrategy(**eggroll_config.__dict__)
-        strategy.setup(simple_mlp)
+        strategy.setup(model)
         
         evolved_params = list(strategy.parameters())
         
-        assert simple_mlp[0].weight not in evolved_params, \
+        assert model[0].weight not in evolved_params, \
             "Frozen parameter (requires_grad=False) should not be evolved"
-        
-        # Restore for other tests
-        simple_mlp[0].weight.requires_grad = True
 
 
 # ============================================================================

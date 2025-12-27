@@ -17,7 +17,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from conftest import (
+from .conftest import (
     EggrollConfig,
     compute_matrix_rank,
     assert_tensors_close,
@@ -33,7 +33,6 @@ from conftest import (
 class TestHighRankAccumulation:
     """Verify that accumulated updates can achieve high rank."""
 
-    @pytest.mark.skip(reason="Gradient accumulation not yet implemented")
     def test_sum_of_rank1_exceeds_rank1(self, medium_tensor, es_generator):
         """
         Sum of rank-1 matrices can have rank > 1.
@@ -81,7 +80,6 @@ class TestHighRankAccumulation:
         rank = compute_matrix_rank(accumulated)
         assert rank > 1, f"Sum of {population_size} rank-1 matrices should have rank > 1, got {rank}"
 
-    @pytest.mark.skip(reason="Gradient accumulation not yet implemented")
     def test_accumulated_rank_grows_with_population(
         self, medium_tensor, es_generator, eggroll_config
     ):
@@ -119,7 +117,6 @@ class TestHighRankAccumulation:
         # Ranks should generally increase (may plateau at full rank)
         assert ranks[-1] >= ranks[0], f"Rank should grow with population: {ranks}"
 
-    @pytest.mark.skip(reason="Gradient accumulation not yet implemented")
     def test_full_rank_achievable_with_sufficient_population(
         self, small_tensor, es_generator, eggroll_config
     ):
@@ -170,7 +167,6 @@ class TestHighRankAccumulation:
 class TestFitnessWeightedAccumulation:
     """Verify fitness-weighted accumulation behavior."""
 
-    @pytest.mark.skip(reason="Fitness weighting not yet implemented")
     def test_weighted_sum_respects_fitness_weights(
         self, small_tensor, es_generator, eggroll_config
     ):
@@ -224,7 +220,6 @@ class TestFitnessWeightedAccumulation:
         correlation = (accumulated * high_pert).sum()
         assert correlation > 0, "Accumulated gradient should favor high-fitness perturbation"
 
-    @pytest.mark.skip(reason="Fitness weighting not yet implemented")
     def test_equal_weights_produce_simple_sum(
         self, small_tensor, es_generator, eggroll_config
     ):
@@ -262,7 +257,6 @@ class TestFitnessWeightedAccumulation:
         
         assert accumulated.abs().max() < 1e-5, "Equal weights should produce near-zero accumulation"
 
-    @pytest.mark.skip(reason="Fitness weighting not yet implemented")
     def test_negative_weights_subtract_perturbation(
         self, small_tensor, es_generator, eggroll_config
     ):
@@ -307,7 +301,6 @@ class TestFitnessWeightedAccumulation:
 class TestRankBounds:
     """Verify theoretical rank bounds are respected."""
 
-    @pytest.mark.skip(reason="Rank bounds not yet implemented")
     def test_accumulated_rank_bounded_by_population_times_r(
         self, medium_tensor, es_generator, eggroll_config
     ):
@@ -348,7 +341,6 @@ class TestRankBounds:
         theoretical_bound = pop_size * r
         assert rank <= theoretical_bound, f"Rank {rank} exceeds theoretical bound {theoretical_bound}"
 
-    @pytest.mark.skip(reason="Rank bounds not yet implemented")
     def test_accumulated_rank_bounded_by_matrix_dimensions(
         self, small_tensor, es_generator, eggroll_config
     ):
@@ -394,7 +386,6 @@ class TestRankBounds:
 class TestSubspaceCoverage:
     """Verify that accumulated perturbations can cover the parameter space."""
 
-    @pytest.mark.skip(reason="Subspace coverage not yet implemented")
     def test_perturbations_span_diverse_directions(
         self, medium_tensor, es_generator, eggroll_config
     ):
@@ -433,7 +424,6 @@ class TestSubspaceCoverage:
         assert significant >= eggroll_config.rank, \
             f"Should have at least {eggroll_config.rank} significant directions, got {significant}"
 
-    @pytest.mark.skip(reason="Subspace coverage not yet implemented")
     @pytest.mark.slow
     def test_full_space_coverage_over_many_epochs(
         self, small_tensor, es_generator, eggroll_config
@@ -478,7 +468,6 @@ class TestSubspaceCoverage:
 class TestUpdateQuality:
     """Verify quality of accumulated gradient estimates."""
 
-    @pytest.mark.skip(reason="Update quality not yet implemented")
     def test_update_direction_is_meaningful(
         self, simple_mlp, batch_input_small, eggroll_config
     ):
@@ -525,7 +514,6 @@ class TestUpdateQuality:
         # (may not always work due to variance, so we just check it's not way worse)
         assert final_fitness >= initial_fitness - 1.0
 
-    @pytest.mark.skip(reason="Update quality not yet implemented")
     def test_update_variance_decreases_with_population(
         self, simple_mlp, batch_input_small, eggroll_config
     ):
@@ -573,7 +561,6 @@ class TestUpdateQuality:
         assert variances[-1] <= variances[0] * 2, \
             f"Variance should decrease with population: {variances}"
 
-    @pytest.mark.skip(reason="Update quality not yet implemented")
     @pytest.mark.slow
     def test_accumulated_gradient_correlates_with_true_gradient(
         self, simple_mlp, batch_input_small
@@ -634,7 +621,6 @@ class TestUpdateQuality:
 class TestNumericalStability:
     """Verify numerical stability of accumulation."""
 
-    @pytest.mark.skip(reason="Numerical stability not yet implemented")
     def test_large_population_accumulation_stable(
         self, medium_tensor, es_generator, eggroll_config
     ):
@@ -666,7 +652,6 @@ class TestNumericalStability:
         assert torch.isfinite(accumulated).all(), \
             "Large population accumulation produced non-finite values"
 
-    @pytest.mark.skip(reason="Numerical stability not yet implemented")
     def test_extreme_fitness_values_handled(
         self, small_tensor, es_generator, eggroll_config
     ):

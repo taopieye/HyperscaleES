@@ -16,7 +16,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from conftest import (
+from .conftest import (
     EggrollConfig,
     make_fitnesses,
     assert_tensors_close,
@@ -31,7 +31,6 @@ from conftest import (
 class TestFitnessNormalization:
     """Verify fitness normalization properties."""
 
-    @pytest.mark.skip(reason="Fitness normalization not yet implemented")
     def test_normalized_scores_have_zero_mean(self, eggroll_config):
         """
         After normalization, fitness scores should have approximately zero mean.
@@ -53,7 +52,6 @@ class TestFitnessNormalization:
         # Mean should be approximately zero
         assert normalized.mean().abs() < 1e-6, f"Expected mean ~0, got {normalized.mean()}"
 
-    @pytest.mark.skip(reason="Fitness normalization not yet implemented")
     def test_normalized_scores_have_unit_variance(self, eggroll_config):
         """
         After normalization, fitness scores should have approximately unit variance.
@@ -77,7 +75,6 @@ class TestFitnessNormalization:
         var = normalized.var(unbiased=False)
         assert abs(var - 1.0) < 0.1, f"Expected variance ~1, got {var}"
 
-    @pytest.mark.skip(reason="Fitness normalization not yet implemented")
     def test_normalization_preserves_ordering(self, eggroll_config):
         """
         Normalization should preserve the relative ordering of fitness scores.
@@ -107,7 +104,6 @@ class TestFitnessNormalization:
         assert torch.equal(original_order, normalized_order), \
             "Normalization should preserve ordering"
 
-    @pytest.mark.skip(reason="Fitness normalization not yet implemented")
     def test_normalization_preserves_sign_of_differences(self, eggroll_config):
         """
         Sign of (f_i - f_j) should be preserved after normalization.
@@ -142,7 +138,6 @@ class TestFitnessNormalization:
 class TestFitnessEdgeCases:
     """Verify handling of edge cases in fitness normalization."""
 
-    @pytest.mark.skip(reason="Edge case handling not yet implemented")
     def test_constant_scores_handled_gracefully(self, eggroll_config):
         """
         All equal fitness scores should not produce NaN/Inf.
@@ -170,7 +165,6 @@ class TestFitnessEdgeCases:
         # All zeros since there's no difference
         assert normalized.abs().max() < 1e-6
 
-    @pytest.mark.skip(reason="Edge case handling not yet implemented")
     def test_very_small_variance_handled(self, eggroll_config):
         """
         Very small variance should not cause numerical issues.
@@ -193,7 +187,6 @@ class TestFitnessEdgeCases:
         # Should not produce NaN or Inf
         assert torch.isfinite(normalized).all(), "Got non-finite values with tiny variance"
 
-    @pytest.mark.skip(reason="Edge case handling not yet implemented")
     def test_large_fitness_values_handled(self, eggroll_config):
         """
         Very large fitness values should be handled without overflow.
@@ -219,7 +212,6 @@ class TestFitnessEdgeCases:
         # Should still have zero mean
         assert normalized.mean().abs() < 1e-5
 
-    @pytest.mark.skip(reason="Edge case handling not yet implemented")
     def test_negative_fitness_values_handled(self, eggroll_config):
         """
         Negative fitness values should be handled correctly.
@@ -243,7 +235,6 @@ class TestFitnessEdgeCases:
         assert torch.isfinite(normalized).all()
         assert normalized.mean().abs() < 1e-6
 
-    @pytest.mark.skip(reason="Edge case handling not yet implemented")
     def test_single_fitness_value_handled(self, eggroll_config):
         """
         Single fitness value (population_size=1) should be handled.
@@ -274,7 +265,6 @@ class TestFitnessEdgeCases:
 class TestRankBasedFitness:
     """Verify rank-based fitness transformation (optional feature)."""
 
-    @pytest.mark.skip(reason="Rank-based fitness not yet implemented")
     def test_rank_transform_option(self, eggroll_config):
         """
         Should support optional rank-based fitness transformation.
@@ -315,7 +305,6 @@ class TestRankBasedFitness:
         transformed_order = transformed.argsort()
         assert torch.equal(original_order, transformed_order)
 
-    @pytest.mark.skip(reason="Rank-based fitness not yet implemented")
     def test_rank_transform_handles_ties(self, eggroll_config):
         """
         Rank transform should handle tied values gracefully.
@@ -349,7 +338,6 @@ class TestRankBasedFitness:
 class TestCenteredRankFitness:
     """Verify centered rank fitness transformation."""
 
-    @pytest.mark.skip(reason="Centered rank not yet implemented")
     def test_centered_rank_is_symmetric(self, eggroll_config):
         """
         Centered rank should produce symmetric values around zero.
@@ -378,7 +366,6 @@ class TestCenteredRankFitness:
         assert transformed.mean().abs() < 1e-6, \
             f"Centered rank mean should be ~0, got {transformed.mean()}"
 
-    @pytest.mark.skip(reason="Centered rank not yet implemented")
     def test_centered_rank_bounded(self, eggroll_config):
         """
         Centered rank should produce bounded values.
@@ -407,7 +394,6 @@ class TestCenteredRankFitness:
 class TestCustomFitnessTransform:
     """Verify custom fitness transformation support."""
 
-    @pytest.mark.skip(reason="Custom fitness not yet implemented")
     def test_custom_fitness_function(self, eggroll_config):
         """
         Should support custom fitness transformation function.
@@ -443,7 +429,6 @@ class TestCustomFitnessTransform:
         assert torch.allclose(transformed, expected), \
             "Custom transform should be applied"
 
-    @pytest.mark.skip(reason="Custom fitness not yet implemented")
     def test_fitness_transform_callable_validation(self, eggroll_config):
         """
         Should validate that custom transform is callable.
@@ -472,7 +457,6 @@ class TestCustomFitnessTransform:
 class TestBaselineSubtraction:
     """Verify baseline subtraction in fitness processing."""
 
-    @pytest.mark.skip(reason="Baseline subtraction not yet implemented")
     def test_mean_baseline_subtraction(self, eggroll_config):
         """
         Default should subtract mean as baseline.
@@ -497,7 +481,6 @@ class TestBaselineSubtraction:
         assert processed.mean().abs() < 1e-6, \
             f"Mean baseline subtraction should center fitnesses, got mean={processed.mean()}"
 
-    @pytest.mark.skip(reason="Baseline subtraction not yet implemented")
     def test_antithetic_baseline_option(self, eggroll_config):
         """
         Should support using antithetic partner as baseline.
@@ -540,7 +523,6 @@ class TestBaselineSubtraction:
 class TestEpsilonHandling:
     """Verify epsilon (stability constant) handling."""
 
-    @pytest.mark.skip(reason="Epsilon handling not yet implemented")
     def test_epsilon_in_variance_normalization(self, eggroll_config):
         """
         Small epsilon should be added to variance for stability.
@@ -560,7 +542,6 @@ class TestEpsilonHandling:
         assert torch.isfinite(normalized).all(), \
             "Epsilon should prevent division by zero"
 
-    @pytest.mark.skip(reason="Epsilon handling not yet implemented")
     def test_custom_epsilon_value(self, eggroll_config):
         """
         Should support custom epsilon value.
@@ -593,7 +574,6 @@ class TestEpsilonHandling:
 class TestFitnessInStep:
     """Verify fitness processing integration with step()."""
 
-    @pytest.mark.skip(reason="Step integration not yet implemented")
     def test_step_normalizes_automatically(
         self, simple_mlp, batch_input_small, eggroll_config
     ):
@@ -637,7 +617,6 @@ class TestFitnessInStep:
         if "normalized_fitness_mean" in metrics:
             assert abs(metrics["normalized_fitness_mean"]) < 1e-6
 
-    @pytest.mark.skip(reason="Step integration not yet implemented")
     def test_step_with_prenormalized_fitness(
         self, simple_mlp, batch_input_small, eggroll_config
     ):

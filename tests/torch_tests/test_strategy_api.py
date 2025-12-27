@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from typing import Iterator, Dict, Any, Optional, ContextManager
 from dataclasses import dataclass
 
-from conftest import (
+from .conftest import (
     EggrollConfig, OpenESConfig, 
     compute_matrix_rank, make_fitnesses, assert_tensors_close,
     unimplemented
@@ -41,7 +41,6 @@ class TestGPURequirement:
     ensure the implementation gives clear feedback when GPU isn't available.
     """
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_setup_rejects_cpu_model(self, device):
         """
         setup() should raise RuntimeError if model is on CPU.
@@ -61,7 +60,6 @@ class TestGPURequirement:
         with pytest.raises(RuntimeError, match="CUDA|GPU"):
             strategy.setup(model)
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_setup_accepts_gpu_model(self, device):
         """
         setup() should work with a model on CUDA.
@@ -82,7 +80,6 @@ class TestGPURequirement:
         # Strategy should have reference to model
         assert strategy.model is model
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_error_message_is_helpful(self, device):
         """
         The error message should explain why GPU is needed and suggest alternatives.
@@ -106,7 +103,6 @@ class TestGPURequirement:
             # Should mention why GPU is needed or what to do
             assert len(str(e)) > 20  # Not just "GPU required"
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_rejects_model_moved_to_cpu_after_setup(self, device):
         """
         Should detect if model is moved to CPU after setup.
@@ -136,7 +132,6 @@ class TestGPURequirement:
             with strategy.perturb(population_size=64, epoch=0) as pop:
                 pop.batched_forward(model, x)
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_rejects_cpu_input_tensors(self, device):
         """
         Should reject CPU tensors passed to batched_forward.
@@ -253,7 +248,6 @@ class TestStrategyInterface:
         pytest.param("open_es", OpenESConfig(), id="OpenES"),
     ]
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
     def test_strategy_instantiation(self, strategy_type, config):
         """
@@ -283,7 +277,6 @@ class TestStrategyInterface:
         strategy_from_config = strategy_cls.from_config(config)
         assert strategy_from_config is not None
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
     def test_setup_attaches_to_model(self, strategy_type, config, simple_mlp):
         """
@@ -314,7 +307,6 @@ class TestStrategyInterface:
         params = list(strategy.parameters())
         assert len(params) > 0
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
     def test_perturb_returns_context_manager(self, strategy_type, config, simple_mlp):
         """
@@ -348,7 +340,6 @@ class TestStrategyInterface:
             outputs = pop.batched_forward(simple_mlp, x)
             assert outputs.shape[0] == 8
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
     def test_step_updates_parameters(self, strategy_type, config, simple_mlp, device):
         """
@@ -395,7 +386,6 @@ class TestStrategyInterface:
                 break
         assert params_changed, "Parameters should have been updated"
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     @pytest.mark.parametrize("strategy_type,config", STRATEGY_CONFIGS)
     def test_state_dict_serialization(self, strategy_type, config, simple_mlp):
         """
@@ -451,7 +441,6 @@ class TestStrategyInterface:
 class TestPerturbationContext:
     """Verify perturbation context manager behavior."""
 
-    @pytest.mark.skip(reason="PerturbationContext not yet implemented")
     def test_context_provides_batched_forward(self, simple_mlp, device):
         """
         Context should provide batched_forward for efficient evaluation.
@@ -479,7 +468,6 @@ class TestPerturbationContext:
             assert outputs.shape[0] == population_size
             assert outputs.shape[1] == 16  # MLP output dim
 
-    @pytest.mark.skip(reason="PerturbationContext not yet implemented")
     def test_context_provides_iterate_for_debugging(self, simple_mlp, device):
         """
         Context should provide iterate() for sequential debugging.
@@ -511,7 +499,6 @@ class TestPerturbationContext:
             for j in range(i + 1, population_size):
                 assert not torch.allclose(outputs[i], outputs[j], rtol=1e-5)
 
-    @pytest.mark.skip(reason="PerturbationContext not yet implemented")
     def test_context_restores_parameters_on_exit(self, simple_mlp, device):
         """
         Exiting context should restore original parameters.
@@ -545,7 +532,6 @@ class TestPerturbationContext:
                 msg=f"Parameter {n} not restored after context exit"
             )
 
-    @pytest.mark.skip(reason="PerturbationContext not yet implemented")
     def test_nested_contexts_raise_error(self, simple_mlp, device):
         """
         Nested perturbation contexts should raise an error.
@@ -574,7 +560,6 @@ class TestPerturbationContext:
 class TestEvalMode:
     """Verify evaluation (no perturbation) behavior."""
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_no_perturbation_outside_context(self, simple_mlp, batch_input_small):
         """
         Outside perturb() context, model should use unperturbed parameters.
@@ -599,7 +584,6 @@ class TestEvalMode:
         
         assert torch.equal(output1, output2), "Model should be deterministic outside context"
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_eval_method_for_explicit_no_noise(self, simple_mlp, batch_input_small):
         """
         Strategy should have explicit eval mode for clarity.
@@ -629,7 +613,6 @@ class TestEvalMode:
 class TestStrategyConfiguration:
     """Verify strategy configuration handling."""
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_sigma_is_readable(self):
         """
         sigma should be accessible as a property.
@@ -643,7 +626,6 @@ class TestStrategyConfiguration:
         strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
         assert strategy.sigma == 0.1
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_lr_is_readable(self):
         """
         lr should be accessible as a property.
@@ -657,7 +639,6 @@ class TestStrategyConfiguration:
         strategy = EggrollStrategy(sigma=0.1, lr=0.01, rank=4)
         assert strategy.lr == 0.01
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_sigma_can_be_updated(self):
         """
         sigma should be updatable for annealing schedules.
@@ -674,7 +655,6 @@ class TestStrategyConfiguration:
         strategy.sigma = 0.05
         assert strategy.sigma == 0.05
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_lr_can_be_updated(self):
         """
         lr should be updatable for learning rate schedules.
@@ -691,7 +671,6 @@ class TestStrategyConfiguration:
         strategy.lr = 0.005
         assert strategy.lr == 0.005
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_from_config_classmethod(self):
         """
         Strategy should be constructible from config dataclass.
@@ -716,7 +695,6 @@ class TestStrategyConfiguration:
 class TestParameterDiscovery:
     """Verify automatic parameter discovery and categorization."""
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_discovers_all_weight_matrices(self, simple_mlp):
         """
         setup() should find all 2D weight parameters (candidates for low-rank).
@@ -741,7 +719,6 @@ class TestParameterDiscovery:
         for w in weights:
             assert w.dim() == 2, "Weight parameters should be 2D matrices"
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_discovers_all_biases(self, mlp_with_bias):
         """
         setup() should find all bias parameters.
@@ -766,7 +743,6 @@ class TestParameterDiscovery:
         for b in biases:
             assert b.dim() == 1, "Bias parameters should be 1D vectors"
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_exclude_parameter_by_name(self, simple_mlp):
         """
         Should be able to exclude specific parameters from evolution.
@@ -792,7 +768,6 @@ class TestParameterDiscovery:
         # Other parameters should still be present
         assert len(param_names) > 0
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_include_only_specific_parameters(self, simple_mlp):
         """
         Should be able to evolve only specific parameters.
@@ -820,7 +795,6 @@ class TestParameterDiscovery:
 class TestCallbacks:
     """Verify callback/hook system for extensibility."""
 
-    @pytest.mark.skip(reason="Callback system not yet implemented")
     def test_on_step_callback(self, simple_mlp):
         """
         Should support callbacks after each step.
@@ -863,7 +837,6 @@ class TestCallbacks:
         assert len(metrics_history) == 1
         assert isinstance(metrics_history[0], dict)
 
-    @pytest.mark.skip(reason="Callback system not yet implemented")
     def test_on_perturb_callback(self, simple_mlp):
         """
         Should support callbacks when perturbations are generated.
@@ -907,7 +880,6 @@ class TestCallbacks:
 class TestErrorHandling:
     """Verify proper error handling and messages."""
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_perturb_before_setup_raises(self):
         """
         Calling perturb() before setup() should raise informative error.
@@ -928,7 +900,6 @@ class TestErrorHandling:
             with strategy.perturb(population_size=8):
                 pass
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_step_before_setup_raises(self):
         """
         Calling step() before setup() should raise informative error.
@@ -942,7 +913,6 @@ class TestErrorHandling:
         with pytest.raises(RuntimeError, match="setup"):
             strategy.step(fitnesses)
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_step_with_wrong_fitness_size_raises(self, simple_mlp):
         """
         Fitness tensor size must match population size.
@@ -973,7 +943,6 @@ class TestErrorHandling:
         with pytest.raises(ValueError, match="population"):
             strategy.step(wrong_fitnesses)
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")
     def test_negative_population_size_raises(self, simple_mlp):
         """
         Population size must be positive.
@@ -993,7 +962,6 @@ class TestErrorHandling:
             with strategy.perturb(population_size=0):
                 pass
 
-    @pytest.mark.skip(reason="Strategy classes not yet implemented")  
     def test_odd_population_with_antithetic_warns(self, simple_mlp):
         """
         Antithetic sampling with odd population should warn.

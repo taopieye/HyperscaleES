@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from conftest import (
+from .conftest import (
     EggrollConfig,
     assert_tensors_close,
     count_parameters,
@@ -30,7 +30,6 @@ from conftest import (
 class TestBasicModuleIntegration:
     """Verify basic integration with nn.Module."""
 
-    @pytest.mark.skip(reason="Module integration not yet implemented")
     def test_setup_with_sequential(self, simple_mlp, eggroll_config):
         """
         Should work with nn.Sequential models.
@@ -49,7 +48,6 @@ class TestBasicModuleIntegration:
         """
         pass
 
-    @pytest.mark.skip(reason="Module integration not yet implemented")
     def test_setup_with_custom_module(self, device, eggroll_config):
         """
         Should work with custom nn.Module subclasses.
@@ -70,7 +68,6 @@ class TestBasicModuleIntegration:
         """
         pass
 
-    @pytest.mark.skip(reason="Module integration not yet implemented")
     def test_setup_with_nested_modules(self, device, eggroll_config):
         """
         Should handle nested module hierarchies.
@@ -102,7 +99,6 @@ class TestBasicModuleIntegration:
 class TestParameterDiscovery:
     """Verify automatic parameter discovery."""
 
-    @pytest.mark.skip(reason="Parameter discovery not yet implemented")
     def test_finds_all_linear_weights(self, simple_mlp, eggroll_config):
         """
         Should automatically find all Linear layer weights.
@@ -117,7 +113,6 @@ class TestParameterDiscovery:
         """
         pass
 
-    @pytest.mark.skip(reason="Parameter discovery not yet implemented")
     def test_finds_all_biases(self, mlp_with_bias, eggroll_config):
         """
         Should automatically find all bias parameters.
@@ -132,7 +127,6 @@ class TestParameterDiscovery:
         """
         pass
 
-    @pytest.mark.skip(reason="Parameter discovery not yet implemented")
     def test_categorizes_parameters_by_type(self, mlp_with_bias, eggroll_config):
         """
         Should categorize parameters as weight_matrix, bias, or other.
@@ -149,7 +143,6 @@ class TestParameterDiscovery:
         """
         pass
 
-    @pytest.mark.skip(reason="Parameter discovery not yet implemented")
     def test_respects_requires_grad(self, simple_mlp, eggroll_config):
         """
         Should only evolve parameters with requires_grad=True.
@@ -175,14 +168,12 @@ class TestParameterDiscovery:
 class TestLayerTypeSupport:
     """Verify support for various layer types."""
 
-    @pytest.mark.skip(reason="Layer type support not yet implemented")
     def test_linear_layer_support(self, device, eggroll_config):
         """
         nn.Linear should be fully supported.
         """
         pass
 
-    @pytest.mark.skip(reason="Layer type support not yet implemented")
     def test_conv2d_layer_support(self, device, eggroll_config):
         """
         nn.Conv2d should be supported (reshape to 2D for low-rank).
@@ -200,7 +191,6 @@ class TestLayerTypeSupport:
         """
         pass
 
-    @pytest.mark.skip(reason="Layer type support not yet implemented")
     def test_embedding_layer_support(self, device, eggroll_config):
         """
         nn.Embedding should be supported.
@@ -215,7 +205,6 @@ class TestLayerTypeSupport:
         """
         pass
 
-    @pytest.mark.skip(reason="Layer type support not yet implemented")
     def test_batchnorm_parameters_excluded_by_default(self, device, eggroll_config):
         """
         BatchNorm parameters should be excluded by default.
@@ -244,7 +233,6 @@ class TestLayerTypeSupport:
 class TestModelState:
     """Verify model state handling."""
 
-    @pytest.mark.skip(reason="Model state handling not yet implemented")
     def test_train_mode_preserved(self, simple_mlp, eggroll_config):
         """
         Model train/eval mode should be preserved during perturbation.
@@ -261,14 +249,12 @@ class TestModelState:
         """
         pass
 
-    @pytest.mark.skip(reason="Model state handling not yet implemented")
     def test_eval_mode_preserved(self, simple_mlp, eggroll_config):
         """
         Eval mode should be preserved during perturbation.
         """
         pass
 
-    @pytest.mark.skip(reason="Model state handling not yet implemented")
     def test_parameters_restored_after_context(
         self, simple_mlp, batch_input_small, eggroll_config
     ):
@@ -298,7 +284,6 @@ class TestModelState:
 class TestDeviceHandling:
     """Verify correct device handling (GPU required)."""
 
-    @pytest.mark.skip(reason="Device handling not yet implemented")
     def test_cuda_model_works(self, device, eggroll_config):
         """
         Should work with CUDA models.
@@ -316,7 +301,6 @@ class TestDeviceHandling:
         """
         pass
 
-    @pytest.mark.skip(reason="Device handling not yet implemented")
     def test_rejects_cpu_model(self, eggroll_config):
         """
         Should reject CPU models with a helpful error message.
@@ -332,7 +316,6 @@ class TestDeviceHandling:
         """
         pass
 
-    @pytest.mark.skip(reason="Device handling not yet implemented")
     def test_perturbations_stay_on_gpu(self, device, eggroll_config):
         """
         All perturbation tensors should stay on GPU.
@@ -349,7 +332,6 @@ class TestDeviceHandling:
 class TestESModuleWrapper:
     """Test the optional ESModule wrapper class."""
 
-    @pytest.mark.skip(reason="ESModule not yet implemented")
     def test_esmodule_wraps_existing_model(self, simple_mlp, eggroll_config):
         """
         ESModule should wrap any existing nn.Module.
@@ -364,7 +346,6 @@ class TestESModuleWrapper:
         """
         pass
 
-    @pytest.mark.skip(reason="ESModule not yet implemented")
     def test_esmodule_forward_delegates(self, simple_mlp, batch_input_small, device):
         """
         ESModule forward should delegate to wrapped model.
@@ -379,7 +360,6 @@ class TestESModuleWrapper:
         """
         pass
 
-    @pytest.mark.skip(reason="ESModule not yet implemented")
     def test_esmodule_works_with_batched_forward(self, simple_mlp, device, eggroll_config):
         """
         ESModule should work seamlessly with batched_forward.
@@ -393,7 +373,6 @@ class TestESModuleWrapper:
         """
         pass
 
-    @pytest.mark.skip(reason="ESModule not yet implemented")
     def test_esmodule_freeze_parameter(self, simple_mlp):
         """
         ESModule should allow freezing specific parameters.
@@ -417,7 +396,6 @@ class TestESModuleWrapper:
 class TestLowRankLinear:
     """Test the optional LowRankLinear layer."""
 
-    @pytest.mark.skip(reason="LowRankLinear not yet implemented")
     def test_lowrank_linear_api(self, device):
         """
         LowRankLinear should have same API as nn.Linear.
@@ -434,7 +412,6 @@ class TestLowRankLinear:
         """
         pass
 
-    @pytest.mark.skip(reason="LowRankLinear not yet implemented")
     def test_lowrank_linear_more_efficient(self, device):
         """
         LowRankLinear should be more efficient during perturbation.
@@ -443,7 +420,6 @@ class TestLowRankLinear:
         """
         pass
 
-    @pytest.mark.skip(reason="LowRankLinear not yet implemented")
     def test_lowrank_linear_configurable_rank(self, device):
         """
         LowRankLinear should allow configuring max perturbation rank.
@@ -461,7 +437,6 @@ class TestLowRankLinear:
 class TestModelSerialization:
     """Test model + strategy serialization."""
 
-    @pytest.mark.skip(reason="Serialization not yet implemented")
     def test_save_load_model_and_strategy(self, simple_mlp, eggroll_config, tmp_path):
         """
         Should be able to save and load model + strategy together.
@@ -495,7 +470,6 @@ class TestModelSerialization:
         """
         pass
 
-    @pytest.mark.skip(reason="Serialization not yet implemented")
     def test_strategy_state_dict_complete(self, simple_mlp, eggroll_config):
         """
         Strategy state_dict should include all necessary state.
@@ -519,7 +493,6 @@ class TestModelSerialization:
 class TestFunctionalAPI:
     """Test optional functional API for advanced users."""
 
-    @pytest.mark.skip(reason="Functional API not yet implemented")
     def test_functional_perturbation(self, simple_mlp, batch_input_small, eggroll_config):
         """
         Should support functional-style perturbation for explicit control.
@@ -537,7 +510,6 @@ class TestFunctionalAPI:
         """
         pass
 
-    @pytest.mark.skip(reason="Functional API not yet implemented")
     def test_functional_update(self, simple_mlp, eggroll_config):
         """
         Should support functional-style updates.

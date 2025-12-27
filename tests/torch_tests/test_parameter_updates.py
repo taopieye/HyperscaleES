@@ -14,7 +14,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from conftest import (
+from .conftest import (
     EggrollConfig,
     make_fitnesses,
     assert_tensors_close,
@@ -30,7 +30,6 @@ from conftest import (
 class TestParameterUpdates:
     """Verify ES gradient estimation and parameter updates."""
 
-    @pytest.mark.skip(reason="Parameter updates not yet implemented")
     def test_higher_fitness_perturbation_dominates_update(
         self, simple_mlp, batch_input_small, eggroll_config
     ):
@@ -88,7 +87,6 @@ class TestParameterUpdates:
         correlation = (delta * high_fitness_pert.as_matrix()).sum()
         assert correlation > 0, "Update should move toward high-fitness perturbation"
 
-    @pytest.mark.skip(reason="Parameter updates not yet implemented")
     def test_equal_fitnesses_produce_no_update(
         self, simple_mlp, eggroll_config
     ):
@@ -127,7 +125,6 @@ class TestParameterUpdates:
         assert torch.allclose(before, after, atol=1e-6), \
             "Equal fitnesses should produce no update after normalization"
 
-    @pytest.mark.skip(reason="Parameter updates not yet implemented")
     def test_antithetic_equal_fitness_cancels(
         self, simple_mlp, eggroll_config
     ):
@@ -183,7 +180,6 @@ class TestParameterUpdates:
 class TestLearningRate:
     """Verify learning rate effects on updates."""
 
-    @pytest.mark.skip(reason="Learning rate handling not yet implemented")
     def test_update_magnitude_scales_with_lr(
         self, simple_mlp, batch_input_small
     ):
@@ -246,7 +242,6 @@ class TestLearningRate:
         assert deltas[2] > deltas[1] > deltas[0], \
             f"Update should scale with lr: {deltas}"
 
-    @pytest.mark.skip(reason="Learning rate handling not yet implemented")
     def test_zero_lr_produces_no_update(self, simple_mlp, eggroll_config):
         """
         lr=0 should produce no parameter updates.
@@ -290,7 +285,6 @@ class TestLearningRate:
 class TestSigmaInUpdate:
     """Verify sigma (noise scale) effects on updates."""
 
-    @pytest.mark.skip(reason="Sigma handling not yet implemented")
     def test_update_scales_inversely_with_sigma(
         self, simple_mlp, batch_input_small
     ):
@@ -338,7 +332,6 @@ class TestSigmaInUpdate:
         # Just verify that updates are finite and change with sigma
         assert all(d > 0 for d in deltas), "All deltas should be positive"
 
-    @pytest.mark.skip(reason="Sigma handling not yet implemented")
     def test_very_small_sigma_handled(self, simple_mlp):
         """
         Very small sigma should not cause numerical issues.
@@ -370,7 +363,6 @@ class TestSigmaInUpdate:
 class TestOptimizerIntegration:
     """Verify integration with PyTorch optimizers."""
 
-    @pytest.mark.skip(reason="Optimizer integration not yet implemented")
     def test_sgd_optimizer(self, simple_mlp, eggroll_config):
         """
         Should work with SGD optimizer.
@@ -407,7 +399,6 @@ class TestOptimizerIntegration:
         # Should have updated
         assert not torch.equal(before, after)
 
-    @pytest.mark.skip(reason="Optimizer integration not yet implemented")
     def test_adam_optimizer(self, simple_mlp, eggroll_config):
         """
         Should work with Adam optimizer.
@@ -440,7 +431,6 @@ class TestOptimizerIntegration:
         # Should have updated
         assert True  # If we get here without error, Adam works
 
-    @pytest.mark.skip(reason="Optimizer integration not yet implemented")
     def test_adamw_optimizer(self, simple_mlp, eggroll_config):
         """
         Should work with AdamW optimizer (with weight decay).
@@ -470,7 +460,6 @@ class TestOptimizerIntegration:
         fitnesses = make_fitnesses(population_size, device=device)
         strategy.step(fitnesses)
 
-    @pytest.mark.skip(reason="Optimizer integration not yet implemented")
     def test_optimizer_state_updates(self, simple_mlp, eggroll_config):
         """
         Optimizer state (e.g., Adam moments) should update correctly.
@@ -521,7 +510,6 @@ class TestOptimizerIntegration:
         fitnesses2 = make_fitnesses(population_size, device=device)
         strategy.step(fitnesses2)
 
-    @pytest.mark.skip(reason="Optimizer integration not yet implemented")
     def test_custom_optimizer(self, simple_mlp):
         """
         Should support custom optimizer classes.
@@ -559,7 +547,6 @@ class TestOptimizerIntegration:
 class TestBiasWeightUpdates:
     """Verify separate handling of biases and weights."""
 
-    @pytest.mark.skip(reason="Bias handling not yet implemented")
     def test_weights_get_lowrank_update(
         self, mlp_with_bias, eggroll_config
     ):
@@ -586,7 +573,6 @@ class TestBiasWeightUpdates:
         # Weights should be updated
         assert not torch.equal(before_weight, after_weight)
 
-    @pytest.mark.skip(reason="Bias handling not yet implemented")
     def test_biases_get_standard_update(
         self, mlp_with_bias, eggroll_config
     ):
@@ -613,7 +599,6 @@ class TestBiasWeightUpdates:
         # Biases should also be updated
         assert not torch.equal(before_bias, after_bias)
 
-    @pytest.mark.skip(reason="Bias handling not yet implemented")
     def test_freeze_bias_option(self, mlp_with_bias, eggroll_config):
         """
         Should be able to freeze biases from evolution.
@@ -668,7 +653,6 @@ class TestBiasWeightUpdates:
 class TestMultiStepUpdates:
     """Verify behavior over multiple update steps."""
 
-    @pytest.mark.skip(reason="Multi-step not yet implemented")
     def test_multiple_steps_accumulate(self, simple_mlp, eggroll_config):
         """
         Multiple steps should accumulate updates.
@@ -709,7 +693,6 @@ class TestMultiStepUpdates:
         delta = (final - initial).norm()
         assert delta > 1e-4, f"Parameters should change significantly, delta={delta}"
 
-    @pytest.mark.skip(reason="Multi-step not yet implemented")
     def test_update_improves_simple_fitness(self, simple_mlp):
         """
         ES should actually optimize a simple fitness function.
@@ -782,7 +765,6 @@ class TestMultiStepUpdates:
 class TestUpdateMetrics:
     """Verify metrics returned by step()."""
 
-    @pytest.mark.skip(reason="Metrics not yet implemented")
     def test_step_returns_metrics_dict(self, simple_mlp, eggroll_config):
         """
         step() should return a dict of useful metrics.
@@ -812,7 +794,6 @@ class TestUpdateMetrics:
         # Check for expected keys
         assert "param_delta_norm" in metrics or "grad_norm" in metrics
 
-    @pytest.mark.skip(reason="Metrics not yet implemented")
     def test_metrics_include_gradient_norm(self, simple_mlp, eggroll_config):
         """
         Metrics should include gradient (update direction) norm.
@@ -835,7 +816,6 @@ class TestUpdateMetrics:
         assert isinstance(metrics["grad_norm"], (int, float))
         assert metrics["grad_norm"] >= 0
 
-    @pytest.mark.skip(reason="Metrics not yet implemented")
     def test_metrics_include_param_delta(self, simple_mlp, eggroll_config):
         """
         Metrics should include parameter change magnitude.
@@ -858,7 +838,6 @@ class TestUpdateMetrics:
         assert isinstance(metrics["param_delta_norm"], (int, float))
         assert metrics["param_delta_norm"] >= 0
 
-    @pytest.mark.skip(reason="Metrics not yet implemented")
     def test_metrics_include_fitness_stats(self, simple_mlp, eggroll_config):
         """
         Metrics should include fitness statistics.
@@ -904,7 +883,6 @@ class TestUpdateMetrics:
 class TestUpdateStability:
     """Verify numerical stability of updates."""
 
-    @pytest.mark.skip(reason="Stability handling not yet implemented")
     def test_no_nan_in_update(self, simple_mlp, eggroll_config):
         """
         Updates should never produce NaN values.
@@ -933,7 +911,6 @@ class TestUpdateStability:
             assert torch.isfinite(p).all(), "Update produced NaN values"
             assert not torch.isnan(p).any(), "Parameters contain NaN"
 
-    @pytest.mark.skip(reason="Stability handling not yet implemented")
     def test_no_inf_in_update(self, simple_mlp, eggroll_config):
         """
         Updates should never produce Inf values.
@@ -957,7 +934,6 @@ class TestUpdateStability:
             assert torch.isfinite(p).all(), "Update produced Inf values"
             assert not torch.isinf(p).any(), "Parameters contain Inf"
 
-    @pytest.mark.skip(reason="Stability handling not yet implemented")
     def test_gradient_clipping_option(self, simple_mlp):
         """
         Should support optional gradient clipping.
@@ -1000,7 +976,6 @@ class TestUpdateStability:
 class TestUpdateStateConsistency:
     """Verify state consistency after updates."""
 
-    @pytest.mark.skip(reason="State consistency not yet implemented")
     def test_epoch_increments_after_step(self, simple_mlp, eggroll_config):
         """
         Internal epoch counter should increment after step.
@@ -1030,7 +1005,6 @@ class TestUpdateStateConsistency:
         
         assert strategy.epoch == 1
 
-    @pytest.mark.skip(reason="State consistency not yet implemented")
     def test_step_count_tracked(self, simple_mlp, eggroll_config):
         """
         Total step count should be tracked.

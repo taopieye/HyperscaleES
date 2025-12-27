@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 
-from conftest import (
+from .conftest import (
     EggrollConfig,
     requires_cuda,
     unimplemented
@@ -25,7 +25,6 @@ from conftest import (
 class TestMultiGPU:
     """Test multi-GPU support."""
 
-    @pytest.mark.skip(reason="Multi-GPU not yet implemented")
     @requires_cuda
     def test_data_parallel_wrapper(self, simple_mlp, eggroll_config):
         """
@@ -41,7 +40,6 @@ class TestMultiGPU:
         """
         pass
 
-    @pytest.mark.skip(reason="Multi-GPU not yet implemented")
     @requires_cuda
     def test_model_on_multiple_gpus(self, eggroll_config):
         """
@@ -57,7 +55,6 @@ class TestMultiGPU:
 class TestDistributedDataParallel:
     """Test DistributedDataParallel (DDP) support."""
 
-    @pytest.mark.skip(reason="DDP not yet implemented")
     def test_ddp_wrapper(self, simple_mlp, eggroll_config):
         """
         Should work with DistributedDataParallel.
@@ -71,7 +68,6 @@ class TestDistributedDataParallel:
         """
         pass
 
-    @pytest.mark.skip(reason="DDP not yet implemented")
     def test_ddp_perturbation_sync(self, simple_mlp, eggroll_config):
         """
         Perturbations should be synchronized across processes.
@@ -90,7 +86,6 @@ class TestDistributedDataParallel:
         """
         pass
 
-    @pytest.mark.skip(reason="DDP not yet implemented")
     def test_ddp_fitness_allgather(self, simple_mlp, eggroll_config):
         """
         Fitness values should be gathered across all ranks.
@@ -114,7 +109,6 @@ class TestDistributedDataParallel:
 class TestPopulationSharding:
     """Test sharding population across processes."""
 
-    @pytest.mark.skip(reason="Population sharding not yet implemented")
     def test_population_divided_across_ranks(self, simple_mlp, eggroll_config):
         """
         Population should be evenly divided across ranks.
@@ -133,7 +127,6 @@ class TestPopulationSharding:
         """
         pass
 
-    @pytest.mark.skip(reason="Population sharding not yet implemented")
     def test_local_member_ids(self, simple_mlp, eggroll_config):
         """
         Each rank should have correct local member IDs.
@@ -157,7 +150,6 @@ class TestPopulationSharding:
 class TestGradientSync:
     """Test gradient synchronization in distributed setting."""
 
-    @pytest.mark.skip(reason="Gradient sync not yet implemented")
     def test_gradient_allreduce(self, simple_mlp, eggroll_config):
         """
         Gradient estimates should be all-reduced across ranks.
@@ -171,7 +163,6 @@ class TestGradientSync:
         """
         pass
 
-    @pytest.mark.skip(reason="Gradient sync not yet implemented")
     def test_parameters_synchronized_after_step(self, simple_mlp, eggroll_config):
         """
         All ranks should have identical parameters after step.
@@ -186,7 +177,6 @@ class TestGradientSync:
 class TestDistributedSeeds:
     """Test seed synchronization in distributed setting."""
 
-    @pytest.mark.skip(reason="Seed sync not yet implemented")
     def test_same_seed_across_ranks(self, eggroll_config):
         """
         All ranks should use the same seed for perturbation generation.
@@ -199,7 +189,6 @@ class TestDistributedSeeds:
         """
         pass
 
-    @pytest.mark.skip(reason="Seed sync not yet implemented")
     def test_seed_in_state_dict_for_checkpoint(self, simple_mlp, eggroll_config):
         """
         Seed should be saved/loaded for checkpoint resume.
@@ -214,7 +203,6 @@ class TestDistributedSeeds:
 class TestDistributedPerformance:
     """Test performance of distributed implementation."""
 
-    @pytest.mark.skip(reason="Performance tests not yet implemented")
     @pytest.mark.slow
     def test_linear_scaling(self, simple_mlp, eggroll_config):
         """
@@ -224,7 +212,6 @@ class TestDistributedPerformance:
         """
         pass
 
-    @pytest.mark.skip(reason="Performance tests not yet implemented")
     @pytest.mark.slow
     def test_communication_overhead(self, simple_mlp, eggroll_config):
         """
@@ -242,14 +229,12 @@ class TestDistributedPerformance:
 class TestDistributedFaultTolerance:
     """Test fault tolerance in distributed setting."""
 
-    @pytest.mark.skip(reason="Fault tolerance not yet implemented")
     def test_checkpoint_resume(self, simple_mlp, eggroll_config):
         """
         Should be able to resume from checkpoint.
         """
         pass
 
-    @pytest.mark.skip(reason="Fault tolerance not yet implemented")
     def test_rank_failure_handling(self, simple_mlp, eggroll_config):
         """
         Should handle rank failures gracefully (future work).
@@ -264,7 +249,6 @@ class TestDistributedFaultTolerance:
 class TestAsyncEvaluation:
     """Test asynchronous population evaluation."""
 
-    @pytest.mark.skip(reason="Async evaluation not yet implemented")
     def test_async_fitness_collection(self, simple_mlp, eggroll_config):
         """
         Should support async fitness collection for better GPU utilization.
@@ -291,7 +275,6 @@ class TestAsyncEvaluation:
 class TestFullyShardedDataParallel:
     """Test FSDP support (future work)."""
 
-    @pytest.mark.skip(reason="FSDP not yet implemented")
     def test_fsdp_wrapper(self, simple_mlp, eggroll_config):
         """
         Should work with FullyShardedDataParallel.
@@ -304,7 +287,6 @@ class TestFullyShardedDataParallel:
         """
         pass
 
-    @pytest.mark.skip(reason="FSDP not yet implemented")
     def test_fsdp_perturbation_sharding(self, simple_mlp, eggroll_config):
         """
         Perturbations should be properly sharded in FSDP.

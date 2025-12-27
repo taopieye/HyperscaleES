@@ -16,7 +16,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from conftest import (
+from .conftest import (
     EggrollConfig,
     assert_tensors_close,
     unimplemented
@@ -30,7 +30,6 @@ from conftest import (
 class TestNoiseDeterminism:
     """Verify deterministic noise generation."""
 
-    @pytest.mark.skip(reason="Noise generation not yet implemented")
     def test_same_inputs_produce_same_noise(
         self, simple_linear, es_generator, eggroll_config, device
     ):
@@ -72,7 +71,6 @@ class TestNoiseDeterminism:
         assert torch.equal(pert1.as_matrix(), pert2.as_matrix()), \
             "Same inputs should produce identical perturbations"
 
-    @pytest.mark.skip(reason="Noise generation not yet implemented")
     def test_different_member_ids_produce_different_noise(
         self, simple_linear, eggroll_config, device
     ):
@@ -109,7 +107,6 @@ class TestNoiseDeterminism:
         assert not torch.equal(pert_0.as_matrix(), pert_1.as_matrix()), \
             "Different member_ids should produce different perturbations"
 
-    @pytest.mark.skip(reason="Noise generation not yet implemented")
     def test_different_epochs_produce_different_noise(
         self, simple_linear, eggroll_config, device
     ):
@@ -158,7 +155,6 @@ class TestNoiseDeterminism:
 class TestNoiseReuse:
     """Verify noise reuse configuration."""
 
-    @pytest.mark.skip(reason="Noise reuse not yet implemented")
     def test_noise_reuse_zero_means_same_noise_every_epoch(
         self, simple_linear, eggroll_config, device
     ):
@@ -211,7 +207,6 @@ class TestNoiseReuse:
         assert torch.equal(pert_epoch0.as_matrix(), pert_epoch100.as_matrix()), \
             "noise_reuse=0: epochs 0 and 100 should have same noise"
 
-    @pytest.mark.skip(reason="Noise reuse not yet implemented")
     def test_noise_reuse_cycles_every_n_epochs(self, simple_linear, device):
         """
         noise_reuse=n means noise changes every n epochs.
@@ -273,7 +268,6 @@ class TestNoiseReuse:
 class TestSeedManagement:
     """Verify seed/generator management."""
 
-    @pytest.mark.skip(reason="Seed management not yet implemented")
     def test_strategy_accepts_seed(self, simple_linear, device):
         """
         Strategy should accept integer seed for reproducibility.
@@ -314,7 +308,6 @@ class TestSeedManagement:
         assert torch.equal(pert1.as_matrix(), pert2.as_matrix()), \
             "Same seed should produce identical perturbations"
 
-    @pytest.mark.skip(reason="Seed management not yet implemented")
     def test_strategy_accepts_generator(self, simple_linear, device):
         """
         Strategy should accept torch.Generator for advanced use.
@@ -343,7 +336,6 @@ class TestSeedManagement:
         )
         assert pert is not None
 
-    @pytest.mark.skip(reason="Seed management not yet implemented")
     def test_different_seeds_produce_different_noise(self, simple_linear, device):
         """
         Different seeds should produce different perturbations.
@@ -382,7 +374,6 @@ class TestSeedManagement:
         assert not torch.equal(pert1.as_matrix(), pert2.as_matrix()), \
             "Different seeds should produce different perturbations"
 
-    @pytest.mark.skip(reason="Seed management not yet implemented")
     def test_seed_in_state_dict(self, simple_mlp, eggroll_config, device):
         """
         Seed should be saved in state_dict for reproducibility.
@@ -419,7 +410,6 @@ class TestSeedManagement:
 class TestKeyFolding:
     """Verify key folding logic for noise generation."""
 
-    @pytest.mark.skip(reason="Key folding not yet implemented")
     def test_key_folding_is_deterministic(self, simple_linear, eggroll_config, device):
         """
         Key folding (combining seed + epoch + member_id) should be deterministic.
@@ -453,7 +443,6 @@ class TestKeyFolding:
             assert torch.equal(results[0], results[i]), \
                 f"Key folding should be deterministic: result {i} differs"
 
-    @pytest.mark.skip(reason="Key folding not yet implemented")
     def test_key_folding_distributes_noise_uniformly(self, simple_linear, eggroll_config, device):
         """
         Folded keys should produce uniformly distributed noise.
@@ -491,7 +480,6 @@ class TestKeyFolding:
         assert abs(mean) < 0.1, f"Mean should be ~0, got {mean:.4f}"
         assert 0.5 < std < 2.0, f"Std should be reasonable, got {std:.4f}"
 
-    @pytest.mark.skip(reason="Key folding not yet implemented")
     def test_parameter_specific_keys(self, simple_mlp, eggroll_config, device):
         """
         Each parameter should have its own key derived from its name.
@@ -541,7 +529,6 @@ class TestKeyFolding:
 class TestNoiseRegeneration:
     """Verify noise can be regenerated for updates."""
 
-    @pytest.mark.skip(reason="Noise regeneration not yet implemented")
     def test_regenerate_perturbation_for_update(
         self, simple_linear, eggroll_config, device
     ):
@@ -586,7 +573,6 @@ class TestNoiseRegeneration:
         # If we got here without error, regeneration worked
         assert "param_delta" in metrics or len(metrics) >= 0  # Some metrics returned
 
-    @pytest.mark.skip(reason="Noise regeneration not yet implemented")
     def test_regenerated_matches_original(self, simple_linear, eggroll_config, device):
         """
         Regenerated perturbation should exactly match original.
@@ -637,7 +623,6 @@ class TestNoiseRegeneration:
 class TestCrossRunReproducibility:
     """Verify reproducibility across different runs/processes."""
 
-    @pytest.mark.skip(reason="Cross-run reproducibility not yet implemented")
     def test_reproducible_across_model_reinit(self, device):
         """
         Same seed should produce same results even after model reinit.
@@ -682,7 +667,6 @@ class TestCrossRunReproducibility:
         assert torch.equal(pert1.as_matrix(), pert2.as_matrix()), \
             "Same seed should produce identical results across reinitializations"
 
-    @pytest.mark.skip(reason="Cross-run reproducibility not yet implemented")
     def test_reproducible_with_checkpoint_restore(self, simple_mlp, eggroll_config, device):
         """
         Results should be reproducible after checkpoint restore.
@@ -770,7 +754,6 @@ class TestCrossRunReproducibility:
 class TestNoiseDeterminismEdgeCases:
     """Test edge cases in noise generation."""
 
-    @pytest.mark.skip(reason="Edge cases not yet implemented")
     def test_large_epoch_number(self, simple_linear, eggroll_config, device):
         """
         Large epoch numbers should not cause overflow or quality issues.
@@ -798,7 +781,6 @@ class TestNoiseDeterminismEdgeCases:
         assert pert.as_matrix().abs().sum() > 0, \
             "Large epoch should produce non-zero perturbation"
 
-    @pytest.mark.skip(reason="Edge cases not yet implemented")
     def test_large_member_id(self, simple_linear, eggroll_config, device):
         """
         Large member_ids should not cause issues.
@@ -823,7 +805,6 @@ class TestNoiseDeterminismEdgeCases:
         assert torch.isfinite(pert.as_matrix()).all(), \
             "Large member_id should not produce inf/nan"
 
-    @pytest.mark.skip(reason="Edge cases not yet implemented")
     def test_epoch_zero_is_valid(self, simple_linear, eggroll_config, device):
         """
         epoch=0 should be a valid input.
@@ -847,7 +828,6 @@ class TestNoiseDeterminismEdgeCases:
         assert pert is not None
         assert torch.isfinite(pert.as_matrix()).all()
 
-    @pytest.mark.skip(reason="Edge cases not yet implemented")
     def test_member_id_zero_is_valid(self, simple_linear, eggroll_config, device):
         """
         member_id=0 should be a valid input.

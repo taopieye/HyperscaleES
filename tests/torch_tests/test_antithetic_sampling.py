@@ -16,7 +16,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from conftest import (
+from .conftest import (
     EggrollConfig,
     assert_tensors_close,
     make_fitnesses,
@@ -31,7 +31,6 @@ from conftest import (
 class TestAntitheticSampling:
     """Verify antithetic (mirrored) sampling structure."""
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_even_odd_pairs_have_opposite_perturbations(
         self, simple_linear, es_generator, eggroll_config, device
     ):
@@ -79,7 +78,6 @@ class TestAntitheticSampling:
                 msg=f"Pair ({i}, {i+1}): perturbations should be exact negatives"
             )
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_antithetic_pairs_share_base_noise(
         self, simple_linear, es_generator, eggroll_config, device
     ):
@@ -135,7 +133,6 @@ class TestAntitheticSampling:
             msg="Antithetic pairs should produce opposite full perturbations"
         )
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_antithetic_flag_controls_behavior(self, simple_linear, es_generator, device):
         """
         antithetic=False should disable mirrored sampling.
@@ -187,7 +184,6 @@ class TestAntitheticSampling:
 class TestVarianceReduction:
     """Verify that antithetic sampling reduces variance."""
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_antithetic_cancellation_with_equal_fitness(
         self, simple_linear, es_generator, eggroll_config, device
     ):
@@ -233,7 +229,6 @@ class TestVarianceReduction:
         assert delta < 1e-4, \
             f"With equal fitness pairs, update should be ~0, got max delta {delta:.6f}"
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_mean_perturbation_is_zero_with_antithetic(
         self, simple_linear, es_generator, eggroll_config, device
     ):
@@ -275,7 +270,6 @@ class TestVarianceReduction:
         assert torch.allclose(total, torch.zeros_like(total), atol=1e-6), \
             "Sum of antithetic perturbations should be exactly zero"
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     @pytest.mark.slow
     def test_variance_is_lower_with_antithetic(self, simple_mlp, batch_input_small, device):
         """
@@ -336,7 +330,6 @@ class TestVarianceReduction:
 class TestAntitheticGradientEstimation:
     """Verify gradient estimation with antithetic pairs."""
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_asymmetric_fitness_produces_gradient(
         self, simple_linear, es_generator, eggroll_config, device
     ):
@@ -379,7 +372,6 @@ class TestAntitheticGradientEstimation:
         assert delta_norm > 1e-6, \
             f"Asymmetric fitness should produce non-zero update, got norm {delta_norm:.8f}"
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_gradient_direction_follows_better_perturbation(
         self, simple_linear, es_generator, eggroll_config, device
     ):
@@ -446,7 +438,6 @@ class TestAntitheticGradientEstimation:
 class TestAntitheticPopulationSize:
     """Test antithetic sampling with various population sizes."""
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_even_population_works(self, simple_mlp, eggroll_config, device):
         """
         Even population size should work normally with antithetic.
@@ -470,7 +461,6 @@ class TestAntitheticPopulationSize:
             
             assert outputs.shape[0] == population_size
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_odd_population_raises_or_warns(self, simple_mlp, eggroll_config, device):
         """
         Odd population with antithetic should warn or raise.
@@ -514,7 +504,6 @@ class TestAntitheticPopulationSize:
                 with strategy.perturb(population_size=odd_population, epoch=0):
                     pass
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_population_size_2_is_single_pair(self, simple_mlp, eggroll_config, device):
         """
         Population size 2 with antithetic is just one perturbation and its mirror.
@@ -556,7 +545,6 @@ class TestAntitheticPopulationSize:
 class TestAntitheticIndexMapping:
     """Verify correct index mapping for antithetic pairs."""
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_get_antithetic_partner(self, eggroll_config, device):
         """
         Should be able to get the antithetic partner index.
@@ -589,7 +577,6 @@ class TestAntitheticIndexMapping:
         assert strategy.get_antithetic_partner(10) == 11
         assert strategy.get_antithetic_partner(11) == 10
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_is_positive_perturbation(self, eggroll_config, device):
         """
         Should be able to check if member is +ε or -ε direction.
@@ -629,7 +616,6 @@ class TestAntitheticIndexMapping:
 class TestMultiLayerAntithetic:
     """Verify antithetic sampling works correctly across multiple layers."""
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_all_layers_use_same_sign(
         self, simple_mlp, batch_input_small, eggroll_config, device
     ):
@@ -674,7 +660,6 @@ class TestMultiLayerAntithetic:
                 msg=f"Layer {name}: members 0 and 1 should have opposite perturbations"
             )
 
-    @pytest.mark.skip(reason="Antithetic sampling not yet implemented")
     def test_layers_have_independent_noise_but_correlated_sign(
         self, simple_mlp, eggroll_config, device
     ):
@@ -719,7 +704,6 @@ class TestMultiLayerAntithetic:
 class TestAntitheticFitnessProcessing:
     """Verify fitness processing respects antithetic structure."""
 
-    @pytest.mark.skip(reason="Antithetic fitness not yet implemented")
     def test_fitness_normalization_preserves_pair_structure(self, eggroll_config, device):
         """
         Fitness normalization should preserve the pair relationship.
@@ -751,7 +735,6 @@ class TestAntitheticFitnessProcessing:
         assert normalized[2] > normalized[3], "Pair 1: member 0 should still be higher"
         assert normalized[6] < normalized[7], "Pair 3: member 0 should still be lower"
 
-    @pytest.mark.skip(reason="Antithetic fitness not yet implemented")
     def test_baseline_subtraction_with_antithetic(self, eggroll_config, device):
         """
         Baseline subtraction can use the antithetic pair as baseline.

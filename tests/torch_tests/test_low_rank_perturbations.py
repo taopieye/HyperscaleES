@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 from typing import Tuple
 
-from conftest import (
+from .conftest import (
     EggrollConfig,
     compute_matrix_rank,
     assert_tensors_close,
@@ -34,7 +34,6 @@ from conftest import (
 class TestLowRankPerturbationStructure:
     """Verify that EGGROLL perturbations have the claimed low-rank structure."""
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_perturbation_returns_low_rank_factors(
         self, simple_linear, es_generator, eggroll_config, device
     ):
@@ -80,7 +79,6 @@ class TestLowRankPerturbationStructure:
         assert A.shape == (m, r), f"Expected A shape ({m}, {r}), got {A.shape}"
         assert B.shape == (n, r), f"Expected B shape ({n}, {r}), got {B.shape}"
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_reconstructed_perturbation_has_correct_rank(
         self, simple_linear, es_generator, eggroll_config, device
     ):
@@ -117,7 +115,6 @@ class TestLowRankPerturbationStructure:
         assert rank <= eggroll_config.rank, \
             f"Perturbation rank {rank} exceeds configured rank {eggroll_config.rank}"
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     @pytest.mark.parametrize("rank", [1, 2, 4, 8, 16])
     def test_rank_parameter_controls_perturbation_rank(
         self, device, rank
@@ -153,7 +150,6 @@ class TestLowRankPerturbationStructure:
         assert actual_rank <= rank, \
             f"Full matrix rank {actual_rank} exceeds configured rank {rank}"
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_rank_one_is_outer_product(self, device):
         """
         At rank=1, the perturbation should be a simple outer product.
@@ -192,7 +188,6 @@ class TestLowRankPerturbationStructure:
         expected = A.squeeze(-1).unsqueeze(1) @ B.squeeze(-1).unsqueeze(0)
         assert_tensors_close(full_matrix, expected, msg="Rank-1 should be outer product")
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_perturbation_has_correct_dtype(self, device, eggroll_config):
         """
         Perturbation factors should match parameter dtype.
@@ -230,7 +225,6 @@ class TestLowRankPerturbationStructure:
         assert B.dtype == model_fp16.weight.dtype, \
             f"B dtype {B.dtype} doesn't match param dtype {model_fp16.weight.dtype}"
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_perturbation_on_correct_device(self, device, eggroll_config):
         """
         Perturbation factors should be on the same device as parameter.
@@ -275,7 +269,6 @@ class TestLowRankPerturbationStructure:
 class TestStorageEfficiency:
     """Verify storage savings from low-rank structure."""
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_storage_savings_calculation(self, device, eggroll_config):
         """
         Verify storage savings: r(m+n) << mn for reasonable r.
@@ -325,7 +318,6 @@ class TestStorageEfficiency:
         assert stats["savings_ratio"] > 10, \
             f"Expected >10x savings, got {stats['savings_ratio']:.1f}x"
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_memory_usage_scales_with_rank(self, device):
         """
         Memory usage should scale linearly with rank, not quadratically.
@@ -376,7 +368,6 @@ class TestStorageEfficiency:
 class TestSigmaScaling:
     """Verify that sigma (noise scale) is applied correctly."""
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_perturbation_magnitude_scales_with_sigma(self, device):
         """
         Larger sigma should produce larger perturbations.
@@ -419,7 +410,6 @@ class TestSigmaScaling:
         assert 5 < ratio_1 < 20, f"Expected ~10x scaling, got {ratio_1:.1f}x"
         assert 5 < ratio_2 < 20, f"Expected ~10x scaling, got {ratio_2:.1f}x"
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_sigma_zero_produces_zero_perturbation(self, device):
         """
         sigma=0 should produce zero perturbation (no noise).
@@ -447,7 +437,6 @@ class TestSigmaScaling:
         assert full_matrix.abs().max() == 0, \
             f"sigma=0 should produce zero perturbation, got max={full_matrix.abs().max():.6f}"
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_perturbation_normalized_by_sqrt_rank(self, device):
         """
         Perturbations should be normalized by sqrt(rank) for consistent magnitude.
@@ -493,7 +482,6 @@ class TestSigmaScaling:
 class TestBatchPerturbation:
     """Verify efficient batch perturbation generation."""
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_batch_perturbation_generation(self, device, eggroll_config):
         """
         Should be able to generate perturbations for entire population at once.
@@ -542,7 +530,6 @@ class TestBatchPerturbation:
             assert A.shape == (m, r), f"Perturbation {i}: A shape mismatch"
             assert B.shape == (n, r), f"Perturbation {i}: B shape mismatch"
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_batch_perturbations_are_independent(self, device, eggroll_config):
         """
         Different population members should have different perturbations.
@@ -594,7 +581,6 @@ class TestBatchPerturbation:
 class TestPerturbationProperties:
     """Verify mathematical properties of perturbations."""
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_perturbation_mean_is_approximately_zero(self, device, eggroll_config):
         """
         Perturbations should have approximately zero mean (unbiased noise).
@@ -637,7 +623,6 @@ class TestPerturbationProperties:
         assert max_mean < 0.1, \
             f"Mean perturbation should be ~0, but max element is {max_mean:.4f}"
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_perturbation_entries_are_normally_distributed(self, device, eggroll_config):
         """
         Perturbation entries should be approximately normally distributed.
@@ -680,7 +665,6 @@ class TestPerturbationProperties:
         # Std should be reasonable (not checking exact value due to low-rank structure)
         assert 0.01 < std < 10.0, f"Std {std:.4f} seems unreasonable"
 
-    @pytest.mark.skip(reason="Perturbation API not yet implemented")
     def test_factors_are_normalized(self, device, eggroll_config):
         """
         Individual factors A and B should have controlled magnitude.
@@ -723,7 +707,6 @@ class TestPerturbationProperties:
 class TestPerturbationDataclass:
     """Test the Perturbation dataclass/namedtuple interface."""
 
-    @pytest.mark.skip(reason="Perturbation dataclass not yet implemented")
     def test_perturbation_is_immutable(self, device, eggroll_config):
         """
         Perturbation should be immutable once created.
@@ -759,7 +742,6 @@ class TestPerturbationDataclass:
         with pytest.raises((AttributeError, TypeError)):
             perturbation.factors = (new_A, new_B)
 
-    @pytest.mark.skip(reason="Perturbation dataclass not yet implemented")
     def test_perturbation_has_metadata(self, device, eggroll_config):
         """
         Perturbation should include metadata for debugging/logging.
@@ -795,7 +777,6 @@ class TestPerturbationDataclass:
         assert perturbation.rank == eggroll_config.rank, \
             f"rank should be {eggroll_config.rank}, got {perturbation.rank}"
 
-    @pytest.mark.skip(reason="Perturbation dataclass not yet implemented")
     def test_perturbation_repr_is_informative(self, device, eggroll_config):
         """
         Perturbation __repr__ should be informative for debugging.

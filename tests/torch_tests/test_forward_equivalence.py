@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from conftest import (
+from .conftest import (
     EggrollConfig,
     compute_matrix_rank,
     assert_tensors_close,
@@ -29,7 +29,6 @@ from conftest import (
 class TestForwardEquivalence:
     """Verify that efficient forward pass matches explicit perturbation."""
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_batched_forward_matches_explicit(
         self, simple_linear, batch_input_small, es_generator, eggroll_config, device
     ):
@@ -82,7 +81,6 @@ class TestForwardEquivalence:
                     msg=f"Member {i}: batched_forward doesn't match explicit computation"
                 )
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_no_perturbation_outside_context(
         self, simple_linear, batch_input_small, eggroll_config, device
     ):
@@ -119,7 +117,6 @@ class TestForwardEquivalence:
         assert torch.allclose(output, expected, atol=1e-6), \
             "Outside perturb() context, forward should use base weights"
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_single_member_forward_matches_batched(
         self, simple_linear, es_generator, eggroll_config, device
     ):
@@ -168,7 +165,6 @@ class TestForwardEquivalence:
 class TestForwardDeterminism:
     """Verify deterministic behavior of forward passes."""
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_batched_forward_is_deterministic(
         self, simple_mlp, batch_input_small, eggroll_config, device
     ):
@@ -208,7 +204,6 @@ class TestForwardDeterminism:
         assert torch.equal(output1, output2), \
             "Same epoch should produce identical outputs"
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_different_epochs_produce_different_outputs(
         self, simple_mlp, batch_input_small, eggroll_config, device
     ):
@@ -239,7 +234,6 @@ class TestForwardDeterminism:
         assert not torch.equal(output_epoch0, output_epoch1), \
             "Different epochs should produce different outputs"
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_population_members_are_diverse(
         self, simple_mlp, batch_input_small, eggroll_config, device
     ):
@@ -280,7 +274,6 @@ class TestForwardDeterminism:
 class TestMultiLayerForward:
     """Verify forward pass through multiple layers."""
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_mlp_batched_forward(
         self, simple_mlp, batch_input_small, eggroll_config, device
     ):
@@ -329,7 +322,6 @@ class TestMultiLayerForward:
                 atol=1e-6
             ), f"Members {i} and {i+1} should have different outputs"
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_selective_layer_perturbation(
         self, simple_mlp, batch_input_small, eggroll_config, device
     ):
@@ -362,7 +354,6 @@ class TestMultiLayerForward:
         assert len(perturbed_params) == 1, \
             f"Expected 1 perturbed parameter, got {len(perturbed_params)}"
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_bias_perturbation(
         self, mlp_with_bias, batch_input_small, eggroll_config, device
     ):
@@ -405,7 +396,6 @@ class TestMultiLayerForward:
 class TestActivationInteraction:
     """Verify perturbations interact correctly with activations."""
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_perturbation_before_activation(
         self, simple_mlp, batch_input_small, eggroll_config, device
     ):
@@ -449,7 +439,6 @@ class TestActivationInteraction:
                 msg="Perturbation should be applied before activation"
             )
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_antithetic_pairs_bracket_base_output(
         self, simple_linear, batch_input_small, eggroll_config, device
     ):
@@ -502,7 +491,6 @@ class TestActivationInteraction:
 class TestComputationalEfficiency:
     """Verify computational efficiency of low-rank forward pass."""
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_flop_count_is_lower(self, large_tensor, eggroll_config, device):
         """
         Low-rank forward should have fewer FLOPs than explicit.
@@ -536,7 +524,6 @@ class TestComputationalEfficiency:
         assert savings_ratio > 5, \
             f"Expected >5x theoretical savings, got {savings_ratio:.1f}x"
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     @pytest.mark.slow
     def test_forward_is_actually_faster(self, device, eggroll_config):
         """
@@ -589,7 +576,6 @@ class TestComputationalEfficiency:
 class TestPopulationForward:
     """Verify efficient forward pass over entire population."""
 
-    @pytest.mark.skip(reason="Population forward not yet implemented")
     def test_batched_forward_is_primary_api(
         self, simple_mlp, batch_input_small, eggroll_config, device
     ):
@@ -624,7 +610,6 @@ class TestPopulationForward:
         assert outputs.shape[1] == 2, \
             f"Output dimension should be 2, got {outputs.shape[1]}"
 
-    @pytest.mark.skip(reason="Population forward not yet implemented")
     def test_iterate_available_for_debugging(
         self, simple_mlp, batch_input_small, eggroll_config, device
     ):
@@ -661,7 +646,6 @@ class TestPopulationForward:
         assert sequential_outputs.shape == (population_size, 2), \
             f"Expected shape ({population_size}, 2), got {sequential_outputs.shape}"
 
-    @pytest.mark.skip(reason="Population forward not yet implemented")
     def test_vmap_style_forward(self, simple_mlp, batch_input_small, eggroll_config, device):
         """
         Should support vmap-style vectorized forward.
@@ -709,7 +693,6 @@ class TestPopulationForward:
 class TestForwardEdgeCases:
     """Test edge cases in forward pass."""
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_single_sample_batch(self, simple_mlp, eggroll_config, device):
         """
         Forward should work with batch_size=1.
@@ -731,7 +714,6 @@ class TestForwardEdgeCases:
         
         assert outputs.shape == (1, 2), f"Expected shape (1, 2), got {outputs.shape}"
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_very_small_rank(self, simple_mlp, batch_input_small, device):
         """
         Forward should work with rank=1.
@@ -760,7 +742,6 @@ class TestForwardEdgeCases:
             assert not torch.allclose(outputs[i], outputs[i+1], atol=1e-6), \
                 f"Outputs {i} and {i+1} should differ even with rank=1"
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_rank_equals_min_dimension(self, simple_linear, batch_input_small, device):
         """
         Forward should work when rank equals min(m, n).
@@ -791,7 +772,6 @@ class TestForwardEdgeCases:
             rank = compute_matrix_rank(pert)
             assert rank == 4, f"Full rank perturbation expected rank 4, got {rank}"
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_empty_batch(self, simple_mlp, eggroll_config, device):
         """
         Forward should handle empty batch gracefully.
@@ -825,7 +805,6 @@ class TestForwardEdgeCases:
 class TestGradientFlow:
     """Verify gradients flow correctly through perturbed forward."""
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_gradients_flow_through_perturbation(
         self, simple_mlp, batch_input_small, eggroll_config, device
     ):
@@ -867,7 +846,6 @@ class TestGradientFlow:
         assert x.grad is not None, "Gradients should flow through perturbed forward"
         assert not torch.all(x.grad == 0), "Gradients should be non-zero"
 
-    @pytest.mark.skip(reason="Forward pass not yet implemented")
     def test_no_grad_context_works(self, simple_mlp, batch_input_small, eggroll_config, device):
         """
         Perturbation should work inside torch.no_grad().
@@ -892,5 +870,3 @@ class TestGradientFlow:
         
         assert outputs.shape == (8, 2), f"Expected shape (8, 2), got {outputs.shape}"
         assert not outputs.requires_grad, "Outputs should not require grad in no_grad context"
-        """
-        pass

@@ -420,6 +420,8 @@ class TestOptimizerIntegration:
         )
         strategy.setup(simple_mlp)
         
+        before = simple_mlp[0].weight.clone()
+        
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
             x = torch.randn(population_size, 8, device=device)
@@ -427,9 +429,10 @@ class TestOptimizerIntegration:
         
         fitnesses = make_fitnesses(population_size, device=device)
         strategy.step(fitnesses)
+        after = simple_mlp[0].weight.clone()
         
-        # Should have updated
-        assert True  # If we get here without error, Adam works
+        # Adam should have updated the weights
+        assert not torch.equal(before, after), "Adam optimizer should update weights"
 
     def test_adamw_optimizer(self, simple_mlp, eggroll_config):
         """

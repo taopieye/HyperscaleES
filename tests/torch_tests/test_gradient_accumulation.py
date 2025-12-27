@@ -65,8 +65,9 @@ class TestHighRankAccumulation:
         model = nn.Linear(medium_tensor.shape[1], medium_tensor.shape[0], bias=False).to(device)
         model.weight.data = medium_tensor.clone()
         
-        # Use rank-1 perturbations
-        config = EggrollConfig(sigma=0.1, lr=0.01, rank=1)
+        # Use rank-1 perturbations with antithetic=False to avoid pair cancellation
+        # (This test is about the mathematical principle, not ES algorithm behavior)
+        config = EggrollConfig(sigma=0.1, lr=0.01, rank=1, antithetic=False)
         strategy = EggrollStrategy.from_config(config)
         strategy.setup(model)
         
@@ -147,8 +148,9 @@ class TestHighRankAccumulation:
         model = nn.Linear(n, m, bias=False).to(device)
         model.weight.data = small_tensor.clone()
         
-        # Use rank-1 perturbations
-        config = EggrollConfig(sigma=0.1, lr=0.01, rank=1)
+        # Use rank-1 perturbations with antithetic=False to avoid pair cancellation
+        # (This test is about the mathematical principle, not ES algorithm behavior)
+        config = EggrollConfig(sigma=0.1, lr=0.01, rank=1, antithetic=False)
         strategy = EggrollStrategy.from_config(config)
         strategy.setup(model)
         

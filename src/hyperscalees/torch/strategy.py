@@ -60,6 +60,8 @@ class BaseStrategy(ABC):
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
         fitness_transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+        grad_clip: Optional[float] = None,
+        freeze_bias: bool = False,
         **kwargs
     ):
         self._sigma = sigma
@@ -70,6 +72,8 @@ class BaseStrategy(ABC):
         self._optimizer_kwargs = optimizer_kwargs or {}
         self._seed = seed or 42
         self._fitness_transform = fitness_transform
+        self._grad_clip = grad_clip
+        self._freeze_bias = freeze_bias
         
         self._model: Optional[nn.Module] = None
         self._optimizer: Optional[torch.optim.Optimizer] = None
@@ -79,7 +83,7 @@ class BaseStrategy(ABC):
         self._last_epoch: int = 0
         self._epoch: int = 0
         self._total_steps: int = 0
-        self._last_population_size: int = 0
+        self._last_population_size: Optional[int] = None
         self._param_keys: Dict[str, int] = {}  # Maps param name to unique key
         self._included_params: Optional[Set[str]] = None
         self._excluded_params: Set[str] = set()
@@ -132,6 +136,11 @@ class BaseStrategy(ABC):
         """Total number of update steps performed."""
         return self._total_steps
     
+    @property
+    def optimizer(self) -> Optional[torch.optim.Optimizer]:
+        """The optimizer used for parameter updates."""
+        return self._optimizer
+    
     def register_callback(self, event: str, callback: Callable) -> None:
         """
         Register a callback for a specific event.
@@ -147,7 +156,11 @@ class BaseStrategy(ABC):
     def _trigger_callbacks(self, event: str, **kwargs) -> None:
         """Trigger all callbacks for an event."""
         for callback in self._callbacks.get(event, []):
-            callback(**kwargs)
+            # Try to call with kwargs, fall back to no args for simple callbacks
+            try:
+                callback(**kwargs)
+            except TypeError:
+                callback()
     
     def get_antithetic_partner(self, member_id: int) -> int:
         """
@@ -268,6 +281,10 @@ class BaseStrategy(ABC):
     def _should_evolve_param(self, name: str, param: torch.Tensor) -> bool:
         """Check if a parameter should be evolved."""
         if not param.requires_grad:
+            return False
+        
+        # Check freeze_bias option
+        if self._freeze_bias and 'bias' in name:
             return False
         
         if self._included_params is not None:
@@ -774,7 +791,7 @@ class EggrollStrategy(BaseStrategy):
         
         return current_input
     
-    def step(self, fitnesses: torch.Tensor) -> Dict[str, Any]:
+    def step(self, fitnesses: torch.Tensor, prenormalized: bool = False) -> Dict[str, Any]:
         """
         Update parameters based on fitness scores.
         
@@ -783,6 +800,10 @@ class EggrollStrategy(BaseStrategy):
         
         For low-rank perturbations:
             ∇̂ = (1/N) Σᵢ f_normalized[i] * A[i] @ B[i].T
+        
+        Args:
+            fitnesses: Fitness scores for each population member.
+            prenormalized: If True, skip internal normalization (fitnesses are already normalized).
         """
         if self._model is None:
             raise RuntimeError("Strategy not set up. Call setup() first.")
@@ -790,12 +811,24 @@ class EggrollStrategy(BaseStrategy):
         fitnesses = fitnesses.to(self._device)
         population_size = fitnesses.shape[0]
         
+        # Check fitness size matches expected population size
+        if self._last_population_size is not None and population_size != self._last_population_size:
+            raise ValueError(
+                f"Fitness size {population_size} does not match expected population size {self._last_population_size}"
+            )
+        
+        # Store original fitnesses for metrics before any transforms
+        original_fitnesses = fitnesses.clone()
+        
         # Apply custom fitness transform if provided
         if self._fitness_transform is not None:
             fitnesses = self._fitness_transform(fitnesses)
         
-        # Normalize fitnesses
-        normalized = self.normalize_fitnesses(fitnesses)
+        # Normalize fitnesses (skip if prenormalized)
+        if prenormalized:
+            normalized = fitnesses
+        else:
+            normalized = self.normalize_fitnesses(fitnesses)
         
         # Compute gradients for each parameter
         metrics = {}
@@ -842,6 +875,13 @@ class EggrollStrategy(BaseStrategy):
         
         total_grad_norm = math.sqrt(total_grad_norm)
         
+        # Apply gradient clipping if configured
+        if self._grad_clip is not None and total_grad_norm > self._grad_clip:
+            clip_coef = self._grad_clip / (total_grad_norm + 1e-8)
+            for name in gradients:
+                gradients[name] = gradients[name] * clip_coef
+            total_grad_norm = self._grad_clip
+        
         # Apply gradients via optimizer
         if self._optimizer is not None:
             self._optimizer.zero_grad()
@@ -868,8 +908,11 @@ class EggrollStrategy(BaseStrategy):
         
         metrics['grad_norm'] = total_grad_norm
         metrics['param_delta'] = total_param_delta
-        metrics['fitness_mean'] = fitnesses.mean().item()
-        metrics['fitness_std'] = fitnesses.std().item()
+        metrics['param_delta_norm'] = total_param_delta
+        metrics['fitness_mean'] = original_fitnesses.mean().item()
+        metrics['fitness_std'] = original_fitnesses.std().item()
+        metrics['fitness_max'] = original_fitnesses.max().item()
+        metrics['fitness_min'] = original_fitnesses.min().item()
         
         self._trigger_callbacks('on_step', metrics=metrics, epoch=self._epoch)
         
@@ -1034,19 +1077,37 @@ class OpenESStrategy(BaseStrategy):
         
         return current_input
     
-    def step(self, fitnesses: torch.Tensor) -> Dict[str, Any]:
-        """Update parameters based on fitness scores."""
+    def step(self, fitnesses: torch.Tensor, prenormalized: bool = False) -> Dict[str, Any]:
+        """Update parameters based on fitness scores.
+        
+        Args:
+            fitnesses: Fitness scores for each population member.
+            prenormalized: If True, skip internal normalization (fitnesses are already normalized).
+        """
         if self._model is None:
             raise RuntimeError("Strategy not set up. Call setup() first.")
         
         fitnesses = fitnesses.to(self._device)
         population_size = fitnesses.shape[0]
         
+        # Check fitness size matches expected population size
+        if self._last_population_size is not None and population_size != self._last_population_size:
+            raise ValueError(
+                f"Fitness size {population_size} does not match expected population size {self._last_population_size}"
+            )
+        
+        # Store original fitnesses for metrics before any transforms
+        original_fitnesses = fitnesses.clone()
+        
         # Apply custom fitness transform if provided
         if self._fitness_transform is not None:
             fitnesses = self._fitness_transform(fitnesses)
         
-        normalized = self.normalize_fitnesses(fitnesses)
+        # Normalize fitnesses (skip if prenormalized)
+        if prenormalized:
+            normalized = fitnesses
+        else:
+            normalized = self.normalize_fitnesses(fitnesses)
         
         metrics = {}
         total_grad_norm = 0.0
@@ -1076,6 +1137,13 @@ class OpenESStrategy(BaseStrategy):
         
         total_grad_norm = math.sqrt(total_grad_norm)
         
+        # Apply gradient clipping if configured
+        if self._grad_clip is not None and total_grad_norm > self._grad_clip:
+            clip_coef = self._grad_clip / (total_grad_norm + 1e-8)
+            for name in gradients:
+                gradients[name] = gradients[name] * clip_coef
+            total_grad_norm = self._grad_clip
+        
         if self._optimizer is not None:
             self._optimizer.zero_grad()
             
@@ -1099,8 +1167,11 @@ class OpenESStrategy(BaseStrategy):
         
         metrics['grad_norm'] = total_grad_norm
         metrics['param_delta'] = total_param_delta
-        metrics['fitness_mean'] = fitnesses.mean().item()
-        metrics['fitness_std'] = fitnesses.std().item()
+        metrics['param_delta_norm'] = total_param_delta
+        metrics['fitness_mean'] = original_fitnesses.mean().item()
+        metrics['fitness_std'] = original_fitnesses.std().item()
+        metrics['fitness_max'] = original_fitnesses.max().item()
+        metrics['fitness_min'] = original_fitnesses.min().item()
         
         self._trigger_callbacks('on_step', metrics=metrics, epoch=self._epoch)
         

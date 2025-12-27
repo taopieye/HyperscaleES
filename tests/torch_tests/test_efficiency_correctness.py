@@ -545,10 +545,22 @@ class TestESGradientCorrectness:
         Larger population should give lower variance gradient estimates.
         
         This is a fundamental property of ES and validates the implementation.
+        
+        The key is to measure variance across INDEPENDENT trials with the
+        SAME starting model state. Each trial should:
+        1. Start from identical model weights
+        2. Use different random seeds for perturbations
+        3. Measure the gradient estimate
+        
+        With larger populations, the gradient estimate should have lower variance.
         """
         from hyperscalees.torch import EggrollStrategy
         
-        model = nn.Linear(16, 8, bias=False).to(device)
+        # Fixed model weights for all trials
+        torch.manual_seed(42)
+        base_weights = torch.randn(8, 16, device=device)
+        
+        # Fixed inputs
         x = torch.randn(8, 16, device=device)
         target = torch.randn(8, 8, device=device)
         
@@ -557,9 +569,15 @@ class TestESGradientCorrectness:
         for pop_size in [32, 128, 512]:
             grad_estimates = []
             
-            for trial in range(10):
+            for trial in range(20):  # More trials for better statistics
+                # Create fresh model with SAME weights each trial
+                model = nn.Linear(16, 8, bias=False).to(device)
+                with torch.no_grad():
+                    model.weight.copy_(base_weights)
+                
+                # Different seed per trial (but same across pop sizes for this trial)
                 strategy = EggrollStrategy(
-                    sigma=0.01, lr=1.0, rank=4, seed=trial * 1000
+                    sigma=0.1, lr=1.0, rank=4, seed=trial * 12345
                 )
                 strategy.setup(model)
                 
@@ -589,34 +607,49 @@ class TestESGradientCorrectness:
             print(f"  Pop {pop_size}: variance = {var:.6f}")
         
         # Variance should decrease with population size
-        assert variances[128] < variances[32], \
-            f"Variance should decrease: {variances[32]:.6f} (32) vs {variances[128]:.6f} (128)"
-        assert variances[512] < variances[128], \
-            f"Variance should decrease: {variances[128]:.6f} (128) vs {variances[512]:.6f} (512)"
+        # Theory: Var(gradient) ∝ 1/N, so doubling N should roughly halve variance
+        assert variances[128] < variances[32] * 0.8, \
+            f"Variance should decrease significantly: {variances[32]:.6f} (32) vs {variances[128]:.6f} (128)"
+        assert variances[512] < variances[128] * 0.8, \
+            f"Variance should decrease significantly: {variances[128]:.6f} (128) vs {variances[512]:.6f} (512)"
 
     def test_antithetic_reduces_variance(self, device):
         """
         Antithetic sampling should reduce gradient variance.
         
         By using paired +ε and -ε perturbations, we get variance reduction.
+        
+        The test must ensure:
+        1. Same model state for all measurements
+        2. Same random seeds to isolate the effect of antithetic vs not
+        3. Enough trials for statistical significance
         """
         from hyperscalees.torch import EggrollStrategy
         
-        model = nn.Linear(16, 8, bias=False).to(device)
+        # Fixed model weights
+        torch.manual_seed(42)
+        base_weights = torch.randn(8, 16, device=device)
+        
+        # Fixed inputs  
         x = torch.randn(8, 16, device=device)
         target = torch.randn(8, 8, device=device)
         
         pop_size = 64
-        n_trials = 20
+        n_trials = 30  # More trials for better statistics
         
         def measure_variance(antithetic: bool) -> float:
             grad_estimates = []
             
             for trial in range(n_trials):
+                # Fresh model with SAME weights each trial
+                model = nn.Linear(16, 8, bias=False).to(device)
+                with torch.no_grad():
+                    model.weight.copy_(base_weights)
+                
                 strategy = EggrollStrategy(
-                    sigma=0.01, lr=1.0, rank=4, 
+                    sigma=0.1, lr=1.0, rank=4, 
                     antithetic=antithetic,
-                    seed=trial * 1000
+                    seed=trial * 12345  # Same seed sequence for fair comparison
                 )
                 strategy.setup(model)
                 
@@ -645,11 +678,16 @@ class TestESGradientCorrectness:
         print(f"\nAntithetic variance reduction:")
         print(f"  With antithetic: {var_with_antithetic:.6f}")
         print(f"  Without antithetic: {var_without_antithetic:.6f}")
-        print(f"  Reduction: {var_without_antithetic / var_with_antithetic:.2f}x")
+        
+        if var_with_antithetic < var_without_antithetic:
+            print(f"  Reduction: {var_without_antithetic / var_with_antithetic:.2f}x")
+        else:
+            print(f"  Ratio (anti/no-anti): {var_with_antithetic / var_without_antithetic:.2f}x")
         
         # Antithetic should reduce variance
         assert var_with_antithetic < var_without_antithetic, \
-            "Antithetic sampling should reduce variance"
+            f"Antithetic sampling should reduce variance: " \
+            f"with={var_with_antithetic:.6f}, without={var_without_antithetic:.6f}"
 
 
 # ============================================================================

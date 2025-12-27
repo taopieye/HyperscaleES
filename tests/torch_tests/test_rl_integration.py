@@ -32,19 +32,20 @@ from .conftest import (
 class MockGymEnv:
     """Mock standard Gym-like environment (non-batched)."""
     
-    def __init__(self, obs_dim: int = 4, action_dim: int = 2):
+    def __init__(self, obs_dim: int = 4, action_dim: int = 2, device: str = 'cpu'):
         self.obs_dim = obs_dim
         self.action_dim = action_dim
+        self.device = device
         self._step_count = 0
         self._max_steps = 100
     
     def reset(self) -> Tuple[torch.Tensor, dict]:
         self._step_count = 0
-        return torch.randn(self.obs_dim), {}
+        return torch.randn(self.obs_dim, device=self.device), {}
     
     def step(self, action: int) -> Tuple[torch.Tensor, float, bool, bool, dict]:
         self._step_count += 1
-        obs = torch.randn(self.obs_dim)
+        obs = torch.randn(self.obs_dim, device=self.device)
         reward = 1.0  # Constant reward for simplicity
         terminated = self._step_count >= self._max_steps
         truncated = False
@@ -54,24 +55,26 @@ class MockGymEnv:
 class MockVectorEnv:
     """Mock vectorized Gym-like environment."""
     
-    def __init__(self, num_envs: int, obs_dim: int = 4, action_dim: int = 2):
+    def __init__(self, num_envs: int, obs_dim: int = 4, action_dim: int = 2, device: str = 'cpu'):
         self.num_envs = num_envs
         self.obs_dim = obs_dim
         self.action_dim = action_dim
+        self.device = device
         self._step_counts = None
         self._max_steps = 100
     
     def reset(self) -> Tuple[torch.Tensor, dict]:
-        self._step_counts = torch.zeros(self.num_envs, dtype=torch.long)
-        return torch.randn(self.num_envs, self.obs_dim), {}
+        self._step_counts = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        return torch.randn(self.num_envs, self.obs_dim, device=self.device), {}
     
     def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
-        assert actions.shape[0] == self.num_envs
+        assert actions.shape[0] == self.num_envs, \
+            f"Actions batch size ({actions.shape[0]}) must match num_envs ({self.num_envs})"
         self._step_counts += 1
-        obs = torch.randn(self.num_envs, self.obs_dim)
-        rewards = torch.ones(self.num_envs)
+        obs = torch.randn(self.num_envs, self.obs_dim, device=self.device)
+        rewards = torch.ones(self.num_envs, device=self.device)
         terminated = self._step_counts >= self._max_steps
-        truncated = torch.zeros(self.num_envs, dtype=torch.bool)
+        truncated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         return obs, rewards, terminated, truncated, {}
 
 
@@ -83,17 +86,18 @@ class MockBatchedEnv:
     submit actions for all batch elements simultaneously.
     """
     
-    def __init__(self, batch_size: int, obs_dim: int = 16, action_dim: int = 4):
+    def __init__(self, batch_size: int, obs_dim: int = 16, action_dim: int = 4, device: str = 'cpu'):
         self.batch_size = batch_size
         self.obs_dim = obs_dim
         self.action_dim = action_dim
+        self.device = device
         self._step_count = 0
         self._max_steps = 200
     
     def reset(self) -> torch.Tensor:
         """Returns obs: (batch_size, obs_dim)"""
         self._step_count = 0
-        return torch.randn(self.batch_size, self.obs_dim)
+        return torch.randn(self.batch_size, self.obs_dim, device=self.device)
     
     def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -109,9 +113,9 @@ class MockBatchedEnv:
             )
         
         self._step_count += 1
-        obs = torch.randn(self.batch_size, self.obs_dim)
-        rewards = torch.randn(self.batch_size)  # Random rewards
-        dones = torch.full((self.batch_size,), self._step_count >= self._max_steps)
+        obs = torch.randn(self.batch_size, self.obs_dim, device=self.device)
+        rewards = torch.randn(self.batch_size, device=self.device)  # Random rewards
+        dones = torch.full((self.batch_size,), self._step_count >= self._max_steps, device=self.device)
         return obs, rewards, dones
 
 
@@ -122,67 +126,65 @@ class MockBatchedEnv:
 class TestBatchedForward:
     """Test batched_forward — the recommended way to evaluate populations."""
 
-    def test_batched_forward_basic(self, simple_mlp, batch_input_small, eggroll_config):
+    def test_batched_forward_basic(self, simple_mlp, eggroll_config, device):
         """
         batched_forward applies different perturbation to each batch element.
-        
-        TARGET API:
-            with strategy.perturb(population_size=8, epoch=0) as pop:
-                # x has shape (8, input_dim)
-                # Each row gets a different perturbation
-                outputs = pop.batched_forward(policy, x)
-                # outputs has shape (8, output_dim)
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(simple_mlp)
+        
+        population_size = 8
+        x = torch.randn(population_size, 8, device=device)
+        
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            outputs = pop.batched_forward(simple_mlp, x)
+        
+        assert outputs.shape[0] == population_size, \
+            f"Output batch size should equal population_size ({population_size}), got {outputs.shape[0]}"
+        assert outputs.shape[1] == 2, \
+            f"Output dim should match model output (2), got {outputs.shape[1]}"
 
-    def test_batched_forward_matches_sequential(self, simple_mlp, eggroll_config, device):
+    def test_batched_forward_different_outputs(self, simple_mlp, eggroll_config, device):
         """
-        batched_forward should produce same results as iterating sequentially.
-        
-        This validates correctness — both methods should give identical outputs.
-        
-        TARGET API:
-            x = torch.randn(8, input_dim, device='cuda')
-            
-            with strategy.perturb(population_size=8, epoch=0) as pop:
-                # Sequential (slower but obviously correct)
-                sequential_outputs = []
-                for i in pop.iterate():
-                    sequential_outputs.append(policy(x[i:i+1]))
-                sequential = torch.cat(sequential_outputs)
-                
-                # Batched (faster, should match)
-                batched = pop.batched_forward(policy, x)
-                
-                assert torch.allclose(sequential, batched)
+        Different population members should produce different outputs.
         """
-        pass
-
-    def test_batched_forward_with_member_ids(self, simple_mlp, eggroll_config, device):
-        """
-        Support custom mapping of batch elements to population members.
+        from hyperscalees.torch import EggrollStrategy
         
-        Useful when batch size != population size, e.g., multiple timesteps
-        per population member.
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(simple_mlp)
         
-        TARGET API:
-            # 16 observations, but only 8 population members
-            x = torch.randn(16, input_dim, device='cuda')
-            member_ids = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7])
-            
-            with strategy.perturb(population_size=8, epoch=0) as pop:
-                outputs = pop.batched_forward(policy, x, member_ids=member_ids)
-                # outputs[0] and outputs[1] both use member 0's perturbation
-        """
-        pass
+        population_size = 8
+        # Same input for all members to isolate perturbation effect
+        x_single = torch.randn(1, 8, device=device)
+        x = x_single.expand(population_size, -1)
+        
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            outputs = pop.batched_forward(simple_mlp, x)
+        
+        # Check that different members produce different outputs
+        for i in range(population_size - 1):
+            assert not torch.allclose(outputs[i], outputs[i + 1], atol=1e-6), \
+                f"Members {i} and {i+1} should produce different outputs with same input"
 
     def test_batched_forward_on_gpu(self, simple_mlp, eggroll_config, device):
         """
         batched_forward should keep everything on GPU.
-        
-        No CPU↔GPU transfers should happen during the forward pass.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(simple_mlp)
+        
+        population_size = 8
+        x = torch.randn(population_size, 8, device=device)
+        
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            outputs = pop.batched_forward(simple_mlp, x)
+        
+        assert outputs.device.type == "cuda", \
+            f"Outputs should stay on GPU, got device {outputs.device}"
 
 
 # ============================================================================
@@ -191,26 +193,6 @@ class TestBatchedForward:
 
 class TestCustomBatchedEnv:
     """Test integration with environments that require batched actions."""
-
-    def test_batched_env_full_loop(self, simple_mlp, eggroll_config):
-        """
-        Full training loop with a batched environment.
-        
-        TARGET API:
-            env = MockBatchedEnv(batch_size=population_size)
-            
-            with strategy.perturb(population_size=population_size, epoch=0) as pop:
-                obs = env.reset()
-                episode_returns = torch.zeros(population_size, device='cuda')
-                
-                while not done:
-                    actions = pop.batched_forward(policy, obs)
-                    obs, rewards, dones = env.step(actions)
-                    episode_returns += rewards * (~dones).float()
-            
-            strategy.step(episode_returns)
-        """
-        pass
 
     def test_batched_env_rejects_unbatched(self, eggroll_config):
         """
@@ -223,6 +205,54 @@ class TestCustomBatchedEnv:
         with pytest.raises(ValueError, match="must be shape"):
             env.step(torch.randn(4))  # Missing batch dim
 
+    def test_batched_env_accepts_correct_shape(self, eggroll_config, device):
+        """
+        Mock env should accept correctly shaped batched actions.
+        """
+        env = MockBatchedEnv(batch_size=8, action_dim=4, device=device)
+        obs = env.reset()
+        
+        actions = torch.randn(8, 4, device=device)
+        next_obs, rewards, dones = env.step(actions)
+        
+        assert next_obs.shape == (8, 16), \
+            f"Obs shape should be (8, 16), got {next_obs.shape}"
+        assert rewards.shape == (8,), \
+            f"Rewards shape should be (8,), got {rewards.shape}"
+
+    def test_batched_env_with_strategy(self, device, eggroll_config):
+        """
+        Strategy should work with batched environments.
+        """
+        from hyperscalees.torch import EggrollStrategy
+        
+        # Simple policy: obs -> action
+        policy = nn.Sequential(
+            nn.Linear(16, 32),
+            nn.ReLU(),
+            nn.Linear(32, 4),  # 4 action dims
+        ).to(device)
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(policy)
+        
+        population_size = 8
+        env = MockBatchedEnv(batch_size=population_size, obs_dim=16, action_dim=4, device=device)
+        
+        obs = env.reset()
+        
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            actions = pop.batched_forward(policy, obs)
+        
+        assert actions.shape == (population_size, 4), \
+            f"Actions shape should be ({population_size}, 4), got {actions.shape}"
+        
+        # Should be able to step the environment
+        next_obs, rewards, dones = env.step(actions)
+        
+        assert rewards.shape == (population_size,), \
+            f"Should get reward for each population member"
+
 
 # ============================================================================
 # Vectorized Gym Tests
@@ -231,28 +261,49 @@ class TestCustomBatchedEnv:
 class TestVectorizedGym:
     """Test integration with gym.vector environments."""
 
-    def test_vectorized_gym_with_batched_forward(self, simple_mlp, eggroll_config):
+    def test_vectorized_gym_shapes(self, device, eggroll_config):
         """
-        Vectorized gym + batched_forward = efficient evaluation.
+        Vectorized gym environment should have correct shapes.
+        """
+        population_size = 8
+        env = MockVectorEnv(num_envs=population_size, obs_dim=4, action_dim=2, device=device)
         
-        TARGET API:
-            envs = MockVectorEnv(num_envs=population_size)
-            
-            with strategy.perturb(population_size=population_size, epoch=0) as pop:
-                obs, _ = envs.reset()
-                
-                while not all_done:
-                    obs_tensor = torch.as_tensor(obs, device='cuda')
-                    actions = pop.batched_forward(policy, obs_tensor)
-                    obs, rewards, terminated, truncated, _ = envs.step(actions.cpu())
-        """
-        pass
+        obs, _ = env.reset()
+        assert obs.shape == (population_size, 4), \
+            f"Obs shape should be ({population_size}, 4), got {obs.shape}"
+        
+        actions = torch.zeros(population_size, device=device, dtype=torch.long)
+        obs, rewards, terminated, truncated, _ = env.step(actions)
+        
+        assert rewards.shape == (population_size,), \
+            f"Rewards shape should be ({population_size},), got {rewards.shape}"
 
-    def test_population_matches_num_envs(self, simple_mlp, eggroll_config):
+    def test_vectorized_gym_with_strategy(self, device, eggroll_config):
         """
-        Typical pattern: population_size == num_envs for 1:1 mapping.
+        Strategy should work with vectorized gym-like environments.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        # Simple policy
+        policy = nn.Sequential(
+            nn.Linear(4, 16),
+            nn.ReLU(),
+            nn.Linear(16, 2),  # 2 action dims
+        ).to(device)
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(policy)
+        
+        population_size = 8
+        env = MockVectorEnv(num_envs=population_size, obs_dim=4, action_dim=2, device=device)
+        
+        obs, _ = env.reset()
+        
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            actions = pop.batched_forward(policy, obs)
+        
+        assert actions.shape == (population_size, 2), \
+            f"Actions shape should be ({population_size}, 2), got {actions.shape}"
 
 
 # ============================================================================
@@ -269,85 +320,138 @@ class TestSequentialEvaluation:
     - Prototyping before implementing batched evaluation
     """
 
-    def test_sequential_gym_evaluation(self, simple_mlp, eggroll_config):
+    def test_sequential_iteration(self, simple_mlp, eggroll_config, device):
         """
-        Basic pattern: iterate through population, run episode for each.
+        Should be able to iterate through population sequentially.
+        """
+        from hyperscalees.torch import EggrollStrategy
         
-        TARGET API:
-            env = MockGymEnv()
-            
-            with strategy.perturb(population_size=8, epoch=0) as pop:
-                for member_id in pop.iterate():
-                    episode_return = run_episode(env, policy)
-                    fitnesses.append(episode_return)
-        """
-        pass
-
-    def test_perturbation_consistent_within_episode(self, simple_mlp, eggroll_config):
-        """
-        Same perturbation should be used throughout an episode.
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(simple_mlp)
         
-        When iterating, multiple forward passes use the same perturbation
-        until you advance to the next population member.
-        """
-        pass
-
-    def test_different_members_different_behavior(self, simple_mlp, eggroll_config):
-        """
-        Different population members should produce different trajectories.
-        """
-        env = MockBatchedEnv(batch_size=8, action_dim=4)
-        env.reset()
+        population_size = 8
+        x = torch.randn(1, 8, device=device)
+        outputs = []
         
-        # Single action should fail
-        with pytest.raises(ValueError, match="must be shape"):
-            env.step(torch.randn(4))  # Missing batch dim
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            for member_id in pop.iterate():
+                output = simple_mlp(x)
+                outputs.append(output.clone())
+        
+        assert len(outputs) == population_size, \
+            f"Should collect {population_size} outputs, got {len(outputs)}"
+        
+        # Different members should give different outputs
+        for i in range(population_size - 1):
+            assert not torch.allclose(outputs[i], outputs[i + 1], atol=1e-6), \
+                f"Sequential outputs {i} and {i+1} should differ"
 
-    def test_batched_env_full_episode(self, simple_mlp, eggroll_config):
+    def test_perturbation_consistent_within_member(self, simple_mlp, eggroll_config, device):
         """
-        Should be able to run full episodes with batched env.
+        Same perturbation should be used for multiple forward passes within a member.
         """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(simple_mlp)
+        
+        x = torch.randn(1, 8, device=device)
+        
+        with strategy.perturb(population_size=8, epoch=0) as pop:
+            # Multiple forward passes for member 0
+            for member_id in pop.iterate():
+                output1 = simple_mlp(x)
+                output2 = simple_mlp(x)
+                output3 = simple_mlp(x)
+                
+                # All should be identical for the same member
+                assert torch.equal(output1, output2), \
+                    f"Multiple passes for member {member_id} should be identical"
+                assert torch.equal(output2, output3), \
+                    f"Multiple passes for member {member_id} should be identical"
+                break  # Just test first member
 
 
 # ============================================================================
-# Multiple Episodes per Member Tests
+# Full Training Loop Tests
 # ============================================================================
 
-class TestMultipleEpisodes:
-    """Test evaluation with multiple episodes per population member."""
+class TestFullTrainingLoop:
+    """Test complete ES training loops with environments."""
 
-    def test_multiple_episodes_same_perturbation(self, simple_mlp, eggroll_config):
+    def test_single_epoch_loop(self, device, eggroll_config):
         """
-        Multiple episodes for same member should use same perturbation.
+        Complete single epoch: perturb -> evaluate -> step.
+        """
+        from hyperscalees.torch import EggrollStrategy
         
-        TARGET API:
-            with strategy.perturb(population_size=8, epoch=0) as pop:
-                for member_id in pop.iterate():
-                    episode_returns = []
-                    
-                    for _ in range(5):  # 5 episodes
-                        # Same perturbation used for all 5 episodes
-                        ret = run_episode(env, policy)
-                        episode_returns.append(ret)
-                    
-                    fitness = sum(episode_returns) / len(episode_returns)
-                    fitnesses.append(fitness)
-        """
-        pass
+        policy = nn.Sequential(
+            nn.Linear(16, 32),
+            nn.ReLU(),
+            nn.Linear(32, 4),
+        ).to(device)
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(policy)
+        
+        population_size = 8
+        env = MockBatchedEnv(batch_size=population_size, obs_dim=16, action_dim=4, device=device)
+        
+        # Single training step
+        obs = env.reset()
+        
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            actions = pop.batched_forward(policy, obs)
+            _, rewards, _ = env.step(actions)
+        
+        # Use rewards as fitness
+        fitnesses = rewards
+        metrics = strategy.step(fitnesses)
+        
+        assert isinstance(metrics, dict), \
+            f"step() should return metrics dict, got {type(metrics)}"
+        assert strategy.total_steps == 1, \
+            f"After one step, total_steps should be 1, got {strategy.total_steps}"
 
-    def test_step_with_episode_counts(self, simple_mlp, eggroll_config):
+    def test_multi_epoch_loop(self, device, eggroll_config):
         """
-        step() should optionally accept episode counts for proper weighting.
+        Multiple epochs should accumulate updates.
+        """
+        from hyperscalees.torch import EggrollStrategy
         
-        TARGET API:
-            fitnesses = torch.tensor([...])
-            num_episodes = torch.tensor([5, 5, 3, 5, 5, 5, 5, 5])  # Member 2 had 3
+        policy = nn.Sequential(
+            nn.Linear(16, 32),
+            nn.ReLU(),
+            nn.Linear(32, 4),
+        ).to(device)
+        
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(policy)
+        
+        initial_weight = policy[0].weight.clone()
+        
+        population_size = 8
+        env = MockBatchedEnv(batch_size=population_size, obs_dim=16, action_dim=4, device=device)
+        
+        num_epochs = 5
+        for epoch in range(num_epochs):
+            obs = env.reset()
             
-            # Proper weighting accounts for different episode counts
-            metrics = strategy.step(fitnesses, num_episodes=num_episodes)
-        """
-        pass
+            with strategy.perturb(population_size=population_size, epoch=epoch) as pop:
+                actions = pop.batched_forward(policy, obs)
+                _, rewards, _ = env.step(actions)
+            
+            strategy.step(rewards)
+        
+        final_weight = policy[0].weight
+        
+        assert strategy.total_steps == num_epochs, \
+            f"After {num_epochs} epochs, total_steps should be {num_epochs}, got {strategy.total_steps}"
+        
+        # Weights should have changed
+        weight_delta = (final_weight - initial_weight).norm().item()
+        assert weight_delta > 1e-6, \
+            f"Weights should change after {num_epochs} epochs, delta={weight_delta:.2e}"
 
 
 # ============================================================================
@@ -357,51 +461,52 @@ class TestMultipleEpisodes:
 class TestFitnessAggregation:
     """Test fitness aggregation patterns common in RL."""
 
-    def test_mean_aggregation(self, simple_mlp, eggroll_config):
+    def test_fitness_from_episode_return(self, device, eggroll_config):
         """
-        Default should be mean aggregation across episodes.
+        Fitness can be computed from episode returns.
         """
-        pass
-
-    def test_sum_aggregation(self, simple_mlp, eggroll_config):
-        """
-        Should support sum aggregation (total return).
-        """
-        pass
-
-    def test_discounted_return(self, simple_mlp, eggroll_config):
-        """
-        Should work with discounted returns.
+        from hyperscalees.torch import EggrollStrategy
         
-        Note: Discounting is handled by user, strategy just sees scalar fitness.
-        """
-        pass
+        policy = nn.Linear(4, 2).to(device)
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(policy)
+        
+        population_size = 8
+        
+        # Simulate episode returns as fitness
+        episode_returns = torch.randn(population_size, device=device)
+        
+        with strategy.perturb(population_size=population_size, epoch=0) as pop:
+            x = torch.randn(population_size, 4, device=device)
+            pop.batched_forward(policy, x)
+        
+        # Episode returns become fitness
+        metrics = strategy.step(episode_returns)
+        
+        assert "fitness_mean" in metrics, \
+            "Metrics should include fitness statistics"
 
-
-# ============================================================================
-# Episode Truncation Tests
-# ============================================================================
-
-class TestEpisodeTruncation:
-    """Test handling of episode truncation and termination."""
-
-    def test_early_termination_handled(self, simple_mlp, eggroll_config):
+    def test_normalized_fitness(self, device, eggroll_config):
         """
-        Episodes that terminate early should be handled correctly.
+        Fitness normalization should work with RL returns.
         """
-        pass
-
-    def test_max_steps_truncation(self, simple_mlp, eggroll_config):
-        """
-        Truncation due to max steps should be handled.
-        """
-        pass
-
-    def test_variable_length_episodes(self, simple_mlp, eggroll_config):
-        """
-        Different population members may have different episode lengths.
-        """
-        pass
+        from hyperscalees.torch import EggrollStrategy
+        
+        policy = nn.Linear(4, 2).to(device)
+        strategy = EggrollStrategy(**eggroll_config.__dict__)
+        strategy.setup(policy)
+        
+        population_size = 8
+        
+        # Episode returns with high variance (common in RL)
+        episode_returns = torch.tensor([100.0, -50.0, 200.0, 10.0, -100.0, 150.0, 0.0, 75.0], device=device)
+        
+        normalized = strategy.normalize_fitnesses(episode_returns)
+        
+        # Should be centered around 0 with bounded values
+        mean = normalized.mean().item()
+        assert abs(mean) < 1e-5, \
+            f"Normalized fitness should have zero mean, got {mean}"
 
 
 # ============================================================================
@@ -411,62 +516,42 @@ class TestEpisodeTruncation:
 class TestRLDeterminism:
     """Test reproducibility in RL setting."""
 
-    def test_same_seed_same_trajectory(self, simple_mlp, eggroll_config):
+    def test_same_seed_same_actions(self, device, eggroll_config):
         """
-        Same seed + same env seed should produce same trajectory.
+        Same seed should produce same actions for same observations.
         """
-        pass
-
-    def test_checkpoint_resume_continues_correctly(self, simple_mlp, eggroll_config):
-        """
-        Resuming from checkpoint should continue training correctly.
-        """
-        pass
-
-
-# ============================================================================
-# Performance Tests
-# ============================================================================
-
-class TestRLPerformance:
-    """Test performance characteristics for RL workloads."""
-
-    @pytest.mark.slow
-    def test_batched_faster_than_sequential(self, deep_mlp, eggroll_config, device):
-        """
-        Batched evaluation should be faster than sequential.
-        """
-        pass
-
-    @pytest.mark.slow
-    def test_gpu_utilization(self, deep_mlp, eggroll_config, device):
-        """
-        GPU utilization should be high with batched evaluation.
-        """
-        pass
-
-
-# ============================================================================
-# Integration with Real Gym (Optional)
-# ============================================================================
-
-class TestRealGymIntegration:
-    """Integration tests with real Gym environments (optional, slow)."""
-
-    @pytest.mark.slow
-    def test_cartpole(self, eggroll_config):
-        """
-        Full integration test with CartPole-v1.
+        from hyperscalees.torch import EggrollStrategy
         
-        Requires: gymnasium installed
-        """
-        pass
-
-    @pytest.mark.slow
-    def test_halfcheetah(self, eggroll_config):
-        """
-        Full integration test with HalfCheetah-v4.
+        def run_with_seed(seed):
+            policy = nn.Sequential(
+                nn.Linear(4, 8),
+                nn.ReLU(),
+                nn.Linear(8, 2),
+            ).to(device)
+            
+            # Reset weights to same values
+            torch.manual_seed(123)
+            for p in policy.parameters():
+                nn.init.normal_(p)
+            
+            strategy = EggrollStrategy(
+                sigma=eggroll_config.sigma,
+                lr=eggroll_config.lr,
+                rank=eggroll_config.rank,
+                seed=seed
+            )
+            strategy.setup(policy)
+            
+            torch.manual_seed(456)  # Same obs for both runs
+            obs = torch.randn(8, 4, device=device)
+            
+            with strategy.perturb(population_size=8, epoch=0) as pop:
+                actions = pop.batched_forward(policy, obs)
+            
+            return actions
         
-        Requires: gymnasium[mujoco] installed
-        """
-        pass
+        actions1 = run_with_seed(42)
+        actions2 = run_with_seed(42)
+        
+        assert torch.allclose(actions1, actions2), \
+            "Same seed should produce identical actions"

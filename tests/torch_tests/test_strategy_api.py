@@ -336,7 +336,7 @@ class TestStrategyInterface:
             assert pop.population_size == 8
             
             # Can call batched_forward
-            x = torch.randn(8, 32, device=device)
+            x = torch.randn(8, 8, device=device)
             outputs = pop.batched_forward(simple_mlp, x)
             assert outputs.shape[0] == 8
 
@@ -366,7 +366,7 @@ class TestStrategyInterface:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             outputs = pop.batched_forward(simple_mlp, x)
         
         # Generate fitnesses
@@ -414,7 +414,7 @@ class TestStrategyInterface:
         # Do a step to update internal state
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -461,7 +461,7 @@ class TestPerturbationContext:
             assert pop.population_size == population_size
             
             # batched_forward should work
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             outputs = pop.batched_forward(simple_mlp, x)
             
             # Output should have shape (population_size, output_dim)
@@ -483,7 +483,7 @@ class TestPerturbationContext:
         strategy.setup(simple_mlp)
         
         population_size = 8
-        x = torch.randn(1, 32, device=device)
+        x = torch.randn(1, 8, device=device)
         outputs = []
         
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
@@ -522,7 +522,7 @@ class TestPerturbationContext:
         original_params = {n: p.clone() for n, p in simple_mlp.named_parameters()}
         
         with strategy.perturb(population_size=8, epoch=0) as pop:
-            x = torch.randn(8, 32, device=device)
+            x = torch.randn(8, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         # Parameters should be restored after context exit
@@ -827,7 +827,7 @@ class TestCallbacks:
         # Do a step
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -866,7 +866,7 @@ class TestCallbacks:
         # Do perturbation
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         # Callback should have been called
@@ -934,7 +934,7 @@ class TestErrorHandling:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         # Wrong fitness size

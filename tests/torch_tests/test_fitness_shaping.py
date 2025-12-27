@@ -599,7 +599,7 @@ class TestFitnessInStep:
         # Perturb and get outputs
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         # Raw fitnesses (not normalized)
@@ -638,7 +638,7 @@ class TestFitnessInStep:
         # Perturb and get outputs
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         # User already normalized

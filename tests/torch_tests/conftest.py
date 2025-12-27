@@ -128,14 +128,14 @@ def small_tensor(device):
 def medium_tensor(device):
     """Medium 2D tensor for rank tests (64x32 matrix)."""
     gen = torch.Generator().manual_seed(123)
-    return torch.randn(64, 32, dtype=torch.float32, device=device, generator=gen) * 0.1
+    return torch.randn(64, 32, dtype=torch.float32, generator=gen).to(device) * 0.1
 
 
 @pytest.fixture
 def large_tensor(device):
     """Larger 2D tensor for scalability tests (256x128 matrix)."""
     gen = torch.Generator().manual_seed(456)
-    return torch.randn(256, 128, dtype=torch.float32, device=device, generator=gen) * 0.1
+    return torch.randn(256, 128, dtype=torch.float32, generator=gen).to(device) * 0.1
 
 
 # ============================================================================
@@ -277,14 +277,14 @@ def large_population_size():
 def batch_input_small(device):
     """Small batch input for basic tests."""
     gen = torch.Generator().manual_seed(789)
-    return torch.randn(4, 8, dtype=torch.float32, device=device, generator=gen)
+    return torch.randn(4, 8, dtype=torch.float32, generator=gen).to(device)
 
 
 @pytest.fixture
 def batch_input_medium(device):
     """Medium batch input for standard tests."""
     gen = torch.Generator().manual_seed(101112)
-    return torch.randn(32, 8, dtype=torch.float32, device=device, generator=gen)
+    return torch.randn(32, 8, dtype=torch.float32, generator=gen).to(device)
 
 
 # ============================================================================
@@ -317,7 +317,7 @@ def make_fitnesses(population_size: int, pattern: str = "random", device: torch.
     
     if pattern == "random":
         gen = torch.Generator().manual_seed(999)
-        return torch.randn(population_size, device=device, generator=gen)
+        return torch.randn(population_size, generator=gen).to(device)
     
     elif pattern == "uniform":
         return torch.ones(population_size, device=device) * 5.0

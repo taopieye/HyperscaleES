@@ -66,7 +66,7 @@ class TestParameterUpdates:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         # One perturbation (index 3) has much higher fitness
@@ -112,7 +112,7 @@ class TestParameterUpdates:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         # All equal fitnesses
@@ -155,7 +155,7 @@ class TestParameterUpdates:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         # Pairs have same fitness: (5,5), (3,3), (7,7), (1,1)
@@ -226,7 +226,7 @@ class TestLearningRate:
             
             population_size = 8
             with strategy.perturb(population_size=population_size, epoch=0) as pop:
-                x = torch.randn(population_size, 32, device=device)
+                x = torch.randn(population_size, 8, device=device)
                 pop.batched_forward(model, x)
             
             fitnesses = torch.randn(population_size, device=device)
@@ -266,7 +266,7 @@ class TestLearningRate:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = torch.randn(population_size, device=device)
@@ -314,7 +314,7 @@ class TestSigmaInUpdate:
             
             population_size = 8
             with strategy.perturb(population_size=population_size, epoch=0) as pop:
-                x = torch.randn(population_size, 32, device=device)
+                x = torch.randn(population_size, 8, device=device)
                 pop.batched_forward(model, x)
             
             fitnesses = torch.randn(population_size, device=device)
@@ -344,7 +344,7 @@ class TestSigmaInUpdate:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = torch.randn(population_size, device=device)
@@ -387,7 +387,7 @@ class TestOptimizerIntegration:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -422,7 +422,7 @@ class TestOptimizerIntegration:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -454,7 +454,7 @@ class TestOptimizerIntegration:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -494,7 +494,7 @@ class TestOptimizerIntegration:
         
         # First step
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         fitnesses1 = make_fitnesses(population_size, device=device)
         strategy.step(fitnesses1)
@@ -505,7 +505,7 @@ class TestOptimizerIntegration:
         
         # Second step
         with strategy.perturb(population_size=population_size, epoch=1) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         fitnesses2 = make_fitnesses(population_size, device=device)
         strategy.step(fitnesses2)
@@ -533,7 +533,7 @@ class TestOptimizerIntegration:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -561,7 +561,7 @@ class TestBiasWeightUpdates:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(mlp_with_bias, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -587,7 +587,7 @@ class TestBiasWeightUpdates:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(mlp_with_bias, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -627,7 +627,7 @@ class TestBiasWeightUpdates:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(mlp_with_bias, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -681,7 +681,7 @@ class TestMultiStepUpdates:
         for epoch in range(10):
             population_size = 64
             with strategy.perturb(population_size=population_size, epoch=epoch) as pop:
-                x = torch.randn(population_size, 32, device=device)
+                x = torch.randn(population_size, 8, device=device)
                 pop.batched_forward(simple_mlp, x)
             
             fitnesses = make_fitnesses(population_size, device=device)
@@ -784,7 +784,7 @@ class TestUpdateMetrics:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -806,7 +806,7 @@ class TestUpdateMetrics:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -828,7 +828,7 @@ class TestUpdateMetrics:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -858,7 +858,7 @@ class TestUpdateMetrics:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], device=device)
@@ -901,7 +901,7 @@ class TestUpdateStability:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -923,7 +923,7 @@ class TestUpdateStability:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         # Even with large fitness values
@@ -957,7 +957,7 @@ class TestUpdateStability:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         # Large fitness spread that would produce large gradients
@@ -997,7 +997,7 @@ class TestUpdateStateConsistency:
         
         population_size = 8
         with strategy.perturb(population_size=population_size, epoch=0) as pop:
-            x = torch.randn(population_size, 32, device=device)
+            x = torch.randn(population_size, 8, device=device)
             pop.batched_forward(simple_mlp, x)
         
         fitnesses = make_fitnesses(population_size, device=device)
@@ -1028,7 +1028,7 @@ class TestUpdateStateConsistency:
         for epoch in range(5):
             population_size = 8
             with strategy.perturb(population_size=population_size, epoch=epoch) as pop:
-                x = torch.randn(population_size, 32, device=device)
+                x = torch.randn(population_size, 8, device=device)
                 pop.batched_forward(simple_mlp, x)
             
             fitnesses = make_fitnesses(population_size, device=device)

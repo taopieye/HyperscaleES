@@ -543,7 +543,7 @@ class TestUpdateQuality:
                 before = model[0].weight.clone()
                 
                 with strategy.perturb(population_size=pop_size, epoch=0) as pop:
-                    x = torch.randn(pop_size, 32, device=device)
+                    x = torch.randn(pop_size, 8, device=device)
                     pop.batched_forward(model, x)
                 
                 fitnesses = make_fitnesses(pop_size, device=device)

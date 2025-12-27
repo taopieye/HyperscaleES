@@ -41,6 +41,13 @@ class Perturbation:
         """Get the low-rank factors (A, B)."""
         return self.A, self.B
     
+    @property
+    def rank(self) -> int:
+        """Get the rank of the perturbation (number of columns in A and B)."""
+        if self.A.dim() < 2:
+            return 1  # 1D tensors have rank 1
+        return self.A.shape[-1]
+    
     def as_matrix(self) -> torch.Tensor:
         """
         Reconstruct the full perturbation matrix A @ B.T.
@@ -48,6 +55,15 @@ class Perturbation:
         WARNING: This materializes the full matrix and should only be
         used for testing/debugging. In production, use the factored form.
         """
+        # Handle 1D tensors (bias perturbations)
+        if self.A.dim() == 1:
+            # For 1D, the perturbation is A * B (broadcast)
+            # Result should match A's shape
+            result = self.A * self.B
+            # Ensure result has the same shape as A (the primary shape)
+            if result.shape != self.A.shape:
+                result = result.expand_as(self.A)
+            return result
         return self.A @ self.B.T
     
     def storage_stats(self) -> Dict[str, Any]:
@@ -60,8 +76,14 @@ class Perturbation:
                 - low_rank_elements: Elements in factored form
                 - savings_ratio: How much smaller factored form is
         """
-        m, r = self.A.shape
-        n, _ = self.B.shape
+        # Handle 1D tensors
+        if self.A.dim() == 1:
+            m = self.A.shape[0]
+            n = self.B.shape[0] if self.B.dim() >= 1 else 1
+            r = 1
+        else:
+            m, r = self.A.shape
+            n = self.B.shape[0]
         
         full_rank_elements = m * n
         low_rank_elements = r * (m + n)

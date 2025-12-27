@@ -152,6 +152,7 @@ class EggrollConfig:
     noise_reuse: int = 0
     optimizer: str = "sgd"
     optimizer_kwargs: Optional[Dict[str, Any]] = None
+    seed: int = 42
 
 
 @dataclass
@@ -163,6 +164,7 @@ class OpenESConfig:
     noise_reuse: int = 0
     optimizer: str = "sgd"
     optimizer_kwargs: Optional[Dict[str, Any]] = None
+    seed: int = 42
 
 
 # ============================================================================

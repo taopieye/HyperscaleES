@@ -17,14 +17,7 @@ from dataclasses import dataclass, field
 from torch.func import vmap
 
 from .perturbation import Perturbation, PerturbationContext
-
-# Conditional Triton import
-try:
-    from .triton_kernels import fused_perturbed_linear
-    HAS_TRITON = True
-except ImportError:
-    HAS_TRITON = False
-    fused_perturbed_linear = None
+from .triton_kernels import fused_perturbed_linear
 
 
 # ==============================================================================
@@ -227,7 +220,6 @@ class EggrollConfig:
     optimizer: str = "sgd"
     optimizer_kwargs: Optional[Dict[str, Any]] = None
     seed: Optional[int] = None
-    use_triton: bool = False  # Use Triton kernels for faster GPU execution
 
 
 @dataclass
@@ -883,7 +875,6 @@ class EggrollStrategy(BaseStrategy):
         optimizer: str = "sgd",
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
-        use_triton: bool = False,
         **kwargs
     ):
         super().__init__(
@@ -897,12 +888,6 @@ class EggrollStrategy(BaseStrategy):
             **kwargs
         )
         self._rank = rank
-        
-        # Triton acceleration
-        if use_triton and not HAS_TRITON:
-            warnings.warn("Triton not available, falling back to PyTorch implementation")
-            use_triton = False
-        self._use_triton = use_triton
     
     @property
     def rank(self) -> int:
@@ -1051,31 +1036,23 @@ class EggrollStrategy(BaseStrategy):
         population_size: int
     ) -> torch.Tensor:
         """
-        Efficient batched forward pass with low-rank perturbations.
-        
-        OPTIMIZED VERSION: Uses cached layer specs and batched RNG operations.
+        Efficient batched forward pass with low-rank perturbations using Triton kernels.
         
         Key optimizations:
         1. Layer specs pre-computed in setup() - no dict lookups or isinstance() in hot path
-        2. Uses _generate_lowrank_factors_batched for parallel RNG (or Triton kernels if enabled)
-        3. Uses einsum for fused perturbation computation
-        4. Avoid vmap dispatch overhead entirely
+        2. Fused Triton kernels for RNG + perturbation computation
+        3. Avoid vmap dispatch overhead entirely
         
         For each linear layer computes: output = x @ W.T + bias + x @ B @ A.T
         """
         # Compute effective epoch for noise reuse
         effective_epoch = 0 if self._noise_reuse == 0 else epoch // self._noise_reuse
         
-        device = x.device
-        dtype = x.dtype
-        
         # Base key incorporating seed and epoch (computed once)
-        base_key_val = (self._seed * 2654435761 + effective_epoch * 2246822519) & 0xFFFFFFFF
-        base_key = torch.tensor(base_key_val, dtype=torch.int64, device=device)
+        base_key = (self._seed * 2654435761 + effective_epoch * 2246822519) & 0xFFFFFFFF
         
         # Use cached layer specs for fast iteration
         current = x  # (N, input_dim)
-        layer_idx = 0  # Track layer index for Triton kernel
         
         for layer_spec in self._layer_cache:
             op_type = layer_spec[0]
@@ -1083,32 +1060,18 @@ class EggrollStrategy(BaseStrategy):
             if op_type == 'linear':
                 _, W, bias, param_key, m, n_in, evolve = layer_spec
                 
-                if evolve and self._use_triton:
-                    # Use Triton fused kernel for perturbed linear
+                if evolve:
+                    # Fused Triton kernel: matmul + perturbation
                     current = fused_perturbed_linear(
                         current, W, bias,
-                        base_key_val, member_ids, param_key,
+                        base_key, member_ids, param_key,
                         self._sigma, self._rank, self._antithetic
                     )
                 else:
-                    # Standard PyTorch path
-                    out = current @ W.T
+                    # Non-evolved layers: standard matmul
+                    current = current @ W.T
                     if bias is not None:
-                        out = out + bias
-                    
-                    if evolve:
-                        # Generate ALL perturbation factors at once
-                        A, B = _generate_lowrank_factors_batched(
-                            base_key, member_ids, param_key,
-                            m, n_in, self._rank, self._sigma,
-                            dtype, device, self._antithetic
-                        )
-                        # Fused perturbation: einsum('bi,bir,bmr->bm', x, B, A)
-                        out = out + torch.einsum('bi,bir,bmr->bm', current, B, A)
-                    
-                    current = out
-                
-                layer_idx += 1
+                        current = current + bias
                 
             elif op_type == 'relu':
                 current = torch.relu(current)

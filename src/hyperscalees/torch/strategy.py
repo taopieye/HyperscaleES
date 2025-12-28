@@ -298,6 +298,8 @@ class BaseStrategy(ABC):
             'on_step': [],
             'on_perturb': [],
         }
+        # Cached layer specs for fast forward pass (populated in setup())
+        self._layer_cache: Optional[List[Tuple]] = None
     
     @classmethod
     def from_config(cls, config: Union[EggrollConfig, OpenESConfig]) -> 'BaseStrategy':
@@ -479,8 +481,50 @@ class BaseStrategy(ABC):
         for i, (name, _) in enumerate(model.named_parameters()):
             self._param_keys[name] = i
         
+        # Build layer cache for fast forward pass
+        self._build_layer_cache(model)
+        
         # Initialize optimizer
         self._init_optimizer()
+    
+    def _build_layer_cache(self, model: nn.Module) -> None:
+        """
+        Pre-compute layer specifications for fast forward pass.
+        
+        This avoids dict lookups, isinstance() checks, and other Python overhead
+        in the hot path. Called once during setup().
+        """
+        cache = []
+        param_names_map = {id(p): n for n, p in model.named_parameters()}
+        
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Linear):
+                W = module.weight
+                bias = module.bias
+                param_name = param_names_map.get(id(W), f"{name}.weight" if name else "weight")
+                evolve = self._should_evolve_param(param_name, W)
+                param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
+                m, n_in = W.shape
+                
+                cache.append(('linear', W, bias, param_key, m, n_in, evolve))
+                
+            elif isinstance(module, nn.ReLU):
+                cache.append(('relu',))
+            elif isinstance(module, nn.Tanh):
+                cache.append(('tanh',))
+            elif isinstance(module, nn.Sigmoid):
+                cache.append(('sigmoid',))
+            elif isinstance(module, nn.GELU):
+                cache.append(('gelu',))
+            elif isinstance(module, nn.Dropout):
+                cache.append(('dropout', module.p, module.training))
+            elif isinstance(module, nn.LayerNorm):
+                cache.append(('layernorm', module.normalized_shape, module.weight, module.bias, module.eps))
+            elif isinstance(module, nn.BatchNorm1d):
+                cache.append(('batchnorm', module.running_mean, module.running_var, 
+                             module.weight, module.bias, module.eps))
+        
+        self._layer_cache = cache
     
     def _init_optimizer(self):
         """Initialize the optimizer for ES updates."""
@@ -993,92 +1037,73 @@ class EggrollStrategy(BaseStrategy):
         """
         Efficient batched forward pass with low-rank perturbations.
         
-        OPTIMIZED VERSION: Uses batched RNG operations instead of vmap.
-        This is ~10-15x faster than the vmap approach and competitive with JAX.
+        OPTIMIZED VERSION: Uses cached layer specs and batched RNG operations.
         
         Key optimizations:
-        1. Pre-generate ALL perturbation factors using _generate_lowrank_factors_batched
-        2. Use bmm (batched matrix multiply) for the forward pass
-        3. Avoid vmap dispatch overhead entirely
+        1. Layer specs pre-computed in setup() - no dict lookups or isinstance() in hot path
+        2. Uses _generate_lowrank_factors_batched for parallel RNG
+        3. Uses einsum for fused perturbation computation
+        4. Avoid vmap dispatch overhead entirely
         
         For each linear layer computes: output = x @ W.T + bias + x @ B @ A.T
         """
         # Compute effective epoch for noise reuse
-        if self._noise_reuse == 0:
-            effective_epoch = 0
-        else:
-            effective_epoch = epoch // self._noise_reuse
+        effective_epoch = 0 if self._noise_reuse == 0 else epoch // self._noise_reuse
         
-        N = member_ids.shape[0]
         device = x.device
         dtype = x.dtype
         
-        # Base key incorporating seed and epoch
+        # Base key incorporating seed and epoch (computed once)
         base_key = torch.tensor(
             (self._seed * 2654435761 + effective_epoch * 2246822519) & 0xFFFFFFFF,
             dtype=torch.int64, device=device
         )
         
-        # Map param ids to names for lookup
-        param_names_map = {id(p): n for n, p in model.named_parameters()}
-        
-        # Process forward pass layer by layer with batched operations
+        # Use cached layer specs for fast iteration
         current = x  # (N, input_dim)
         
-        for name, module in model.named_modules():
-            if isinstance(module, nn.Linear):
-                W = module.weight
-                bias = module.bias
-                param_name = param_names_map.get(id(W), f"{name}.weight" if name else "weight")
-                evolve = self._should_evolve_param(param_name, W)
-                param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
-                
-                m, n_in = W.shape
+        for layer_spec in self._layer_cache:
+            op_type = layer_spec[0]
+            
+            if op_type == 'linear':
+                _, W, bias, param_key, m, n_in, evolve = layer_spec
                 
                 # Base computation (same for all members)
-                base_out = current @ W.T  # (N, m)
+                out = current @ W.T
                 if bias is not None:
-                    base_out = base_out + bias
+                    out = out + bias
                 
                 if evolve:
-                    # Generate ALL perturbation factors at once using batched RNG
+                    # Generate ALL perturbation factors at once
                     A, B = _generate_lowrank_factors_batched(
                         base_key, member_ids, param_key,
                         m, n_in, self._rank, self._sigma,
                         dtype, device, self._antithetic
                     )
-                    # A: (N, m, r), B: (N, n_in, r)
-                    
-                    # Batched perturbation: x @ B @ A.T
-                    # current: (N, n_in) -> (N, 1, n_in)
-                    xB = torch.bmm(current.unsqueeze(1), B)  # (N, 1, r)
-                    pert = torch.bmm(xB, A.transpose(-1, -2)).squeeze(1)  # (N, m)
-                    
-                    current = base_out + pert
-                else:
-                    current = base_out
-                    
-            elif isinstance(module, nn.ReLU):
+                    # Fused perturbation: einsum('bi,bir,bmr->bm', x, B, A)
+                    out = out + torch.einsum('bi,bir,bmr->bm', current, B, A)
+                
+                current = out
+                
+            elif op_type == 'relu':
                 current = torch.relu(current)
-            elif isinstance(module, nn.Tanh):
+            elif op_type == 'tanh':
                 current = torch.tanh(current)
-            elif isinstance(module, nn.Sigmoid):
+            elif op_type == 'sigmoid':
                 current = torch.sigmoid(current)
-            elif isinstance(module, nn.GELU):
+            elif op_type == 'gelu':
                 current = torch.nn.functional.gelu(current)
-            elif isinstance(module, nn.Dropout):
-                if module.training:
-                    current = torch.nn.functional.dropout(current, p=module.p, training=True)
-            elif isinstance(module, nn.LayerNorm):
-                # LayerNorm works element-wise per sample
-                current = torch.nn.functional.layer_norm(
-                    current, module.normalized_shape, module.weight, module.bias, module.eps
-                )
-            elif isinstance(module, nn.BatchNorm1d):
-                # BatchNorm needs special handling for batched population
+            elif op_type == 'dropout':
+                _, p, training = layer_spec
+                if training:
+                    current = torch.nn.functional.dropout(current, p=p, training=True)
+            elif op_type == 'layernorm':
+                _, normalized_shape, weight, ln_bias, eps = layer_spec
+                current = torch.nn.functional.layer_norm(current, normalized_shape, weight, ln_bias, eps)
+            elif op_type == 'batchnorm':
+                _, running_mean, running_var, weight, bn_bias, eps = layer_spec
                 current = torch.nn.functional.batch_norm(
-                    current, module.running_mean, module.running_var,
-                    module.weight, module.bias, False, 0.0, module.eps
+                    current, running_mean, running_var, weight, bn_bias, False, 0.0, eps
                 )
         
         return current

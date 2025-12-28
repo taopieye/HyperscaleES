@@ -14,7 +14,6 @@ import warnings
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Iterator, List, Tuple, Union, ContextManager, Set, Callable
 from dataclasses import dataclass, field
-from functools import partial
 
 # Import vmap from torch.func (PyTorch 2.0+)
 from torch.func import vmap
@@ -856,43 +855,6 @@ class EggrollStrategy(BaseStrategy):
             all_A = all_A * signs
         
         return all_A, all_B
-
-    def _perturbed_linear(
-        self,
-        x: torch.Tensor,
-        W: torch.Tensor,
-        bias: Optional[torch.Tensor],
-        A: torch.Tensor,
-        B: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Single perturbed linear layer computation.
-        
-        Computes: x @ W.T + bias + x @ B @ A.T
-        
-        This function is designed to be vmapped over the batch dimension.
-        
-        Args:
-            x: Input tensor (in_features,) - single sample
-            W: Weight matrix (out_features, in_features)
-            bias: Optional bias (out_features,) or None
-            A: Low-rank factor (out_features, rank)
-            B: Low-rank factor (in_features, rank)
-        
-        Returns:
-            Output tensor (out_features,)
-        """
-        # Base output: x @ W.T
-        out = x @ W.T
-        
-        # Add bias if present
-        if bias is not None:
-            out = out + bias
-        
-        # Add perturbation: x @ B @ A.T
-        out = out + (x @ B) @ A.T
-        
-        return out
     
     def _batched_forward_impl(
         self,
@@ -956,13 +918,17 @@ class EggrollStrategy(BaseStrategy):
                 B_batch = all_B[member_ids]  # (batch_size, n_in, r)
                 
                 # Use vmap to compute perturbed forward for all samples
-                # vmap over: x (batch), A (batch), B (batch)
-                # W and bias are shared across the batch
-                vmapped_linear = vmap(
-                    partial(self._perturbed_linear, W=W, bias=bias),
-                    in_dims=(0, 0, 0)  # vmap over x, A, B
-                )
+                # Define the single-sample function inline to capture W and bias
+                def perturbed_linear_single(x_single, A_single, B_single):
+                    # x @ W.T + bias + x @ B @ A.T
+                    out = x_single @ W.T
+                    if bias is not None:
+                        out = out + bias
+                    out = out + (x_single @ B_single) @ A_single.T
+                    return out
                 
+                # vmap over batch dimension (x, A, B all have batch dim 0)
+                vmapped_linear = vmap(perturbed_linear_single, in_dims=(0, 0, 0))
                 current_input = vmapped_linear(current_input, A_batch, B_batch)
                 
             elif isinstance(module, (nn.ReLU, nn.Tanh, nn.Sigmoid, nn.GELU)):

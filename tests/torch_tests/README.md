@@ -408,20 +408,6 @@ model = nn.Sequential(
 es_model = ESModule(model)  # Ready for ES optimization
 ```
 
-### ES-Aware Layers (More Efficient)
-
-For best performance, use layers designed for low-rank perturbations:
-
-```python
-from hyperscalees.torch import LowRankLinear
-
-model = nn.Sequential(
-    LowRankLinear(10, 64),  # Optimized for EGGROLL
-    nn.ReLU(),
-    LowRankLinear(64, 10)
-)
-```
-
 ### Accessing Perturbation Factors (Advanced)
 
 For debugging or analysis, you can inspect the low-rank factors directly:

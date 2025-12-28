@@ -9,7 +9,6 @@ Main classes:
 - EggrollStrategy: Low-rank evolution strategy with efficient batched perturbations
 - OpenESStrategy: Standard OpenAI Evolution Strategy (full-rank perturbations)
 - ESModule: Wrapper for ES-compatible models
-- LowRankLinear: Linear layer optimized for low-rank perturbations
 
 Example usage:
     from hyperscalees.torch import EggrollStrategy
@@ -35,7 +34,7 @@ from .strategy import (
     EggrollConfig, OpenESConfig
 )
 from .perturbation import Perturbation, PerturbationContext
-from .module import ESModule, LowRankLinear
+from .module import ESModule
 
 __all__ = [
     'EggrollStrategy',
@@ -46,5 +45,4 @@ __all__ = [
     'Perturbation',
     'PerturbationContext',
     'ESModule',
-    'LowRankLinear',
 ]

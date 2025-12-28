@@ -14,6 +14,10 @@ import warnings
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Iterator, List, Tuple, Union, ContextManager, Set, Callable
 from dataclasses import dataclass, field
+from functools import partial
+
+# Import vmap from torch.func (PyTorch 2.0+)
+from torch.func import vmap
 
 from .perturbation import Perturbation, PerturbationContext
 
@@ -825,29 +829,19 @@ class EggrollStrategy(BaseStrategy):
             all_A: (population_size, m_out, r) - already scaled by sigma and antithetic sign
             all_B: (population_size, n_in, r)
         """
-        seeds = self._get_batched_seeds(population_size, epoch, param_key)
-        
-        # Generate all random numbers at once
-        # We use a deterministic approach: for each member, generate using its seed
-        # To avoid Python loops, we generate a large tensor and use the seed as an offset
-        # into a reproducible random stream
-        
         # Create a master generator from the combined seed
         master_seed = (self._seed * 1000003 + epoch * 1009 + param_key) % (2**31 - 1)
         gen = torch.Generator(device='cpu')
         gen.manual_seed(master_seed)
         
         # Generate all random numbers at once: (population_size, m_out + n_in, r)
-        # Note: For true reproducibility with the sequential version, we'd need 
-        # per-member generators. But for batched mode, this is much faster and
-        # still deterministic for the same (epoch, population_size, param_key).
         all_random = torch.randn(
             (population_size, m_out + n_in, r),
             dtype=dtype,
             generator=gen
         ).to(device)
         
-        # Split into A and B
+        # Split into A and B (following JAX: B is first n_in rows, A is next m_out)
         all_B = all_random[:, :n_in, :]      # (population_size, n_in, r)
         all_A = all_random[:, n_in:, :]      # (population_size, m_out, r)
         
@@ -862,6 +856,43 @@ class EggrollStrategy(BaseStrategy):
             all_A = all_A * signs
         
         return all_A, all_B
+
+    def _perturbed_linear(
+        self,
+        x: torch.Tensor,
+        W: torch.Tensor,
+        bias: Optional[torch.Tensor],
+        A: torch.Tensor,
+        B: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Single perturbed linear layer computation.
+        
+        Computes: x @ W.T + bias + x @ B @ A.T
+        
+        This function is designed to be vmapped over the batch dimension.
+        
+        Args:
+            x: Input tensor (in_features,) - single sample
+            W: Weight matrix (out_features, in_features)
+            bias: Optional bias (out_features,) or None
+            A: Low-rank factor (out_features, rank)
+            B: Low-rank factor (in_features, rank)
+        
+        Returns:
+            Output tensor (out_features,)
+        """
+        # Base output: x @ W.T
+        out = x @ W.T
+        
+        # Add bias if present
+        if bias is not None:
+            out = out + bias
+        
+        # Add perturbation: x @ B @ A.T
+        out = out + (x @ B) @ A.T
+        
+        return out
     
     def _batched_forward_impl(
         self,
@@ -872,12 +903,12 @@ class EggrollStrategy(BaseStrategy):
         population_size: int
     ) -> torch.Tensor:
         """
-        Efficient batched forward pass with low-rank perturbations.
+        Efficient batched forward pass with low-rank perturbations using vmap.
         
         For each linear layer, computes:
             output[i] = x[i] @ W.T + bias + x[i] @ B[member_ids[i]] @ A[member_ids[i]].T
         
-        Following JAX EGGROLL: perturbation is A @ B.T where A has the sigma scaling.
+        Uses torch.vmap for efficient batched computation, following JAX EGGROLL.
         """
         batch_size = x.shape[0]
         current_input = x
@@ -885,50 +916,54 @@ class EggrollStrategy(BaseStrategy):
         # Build param_name -> param mapping once
         param_names = {id(p): n for n, p in model.named_parameters()}
         
+        # Pre-generate all perturbations for all linear layers
+        layer_perturbations = {}
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Linear):
+                W = module.weight
+                param_name = param_names.get(id(W), f"{name}.weight" if name else "weight")
+                
+                if self._should_evolve_param(param_name, W):
+                    m_out, n_in = W.shape
+                    r = min(self._rank, m_out, n_in)
+                    param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
+                    
+                    all_A, all_B = self._generate_all_perturbations(
+                        m_out, n_in, r, population_size, epoch, param_key,
+                        x.device, x.dtype
+                    )
+                    layer_perturbations[name] = (all_A, all_B)
+        
         # Process each layer
         for name, module in model.named_modules():
             if isinstance(module, nn.Linear):
-                W = module.weight  # (out_features, in_features)
+                W = module.weight
                 bias = module.bias
-                
-                # Compute base output: x @ W.T + bias
-                base_output = current_input @ W.T
-                if bias is not None:
-                    base_output = base_output + bias
-                
-                # Get parameter name
                 param_name = param_names.get(id(W), f"{name}.weight" if name else "weight")
                 
                 if not self._should_evolve_param(param_name, W):
-                    current_input = base_output
+                    # No perturbation - standard forward
+                    current_input = current_input @ W.T
+                    if bias is not None:
+                        current_input = current_input + bias
                     continue
                 
-                # Generate all perturbations at once (no Python loop)
-                m_out, n_in = W.shape
-                r = min(self._rank, m_out, n_in)
-                param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
-                
-                all_A, all_B = self._generate_all_perturbations(
-                    m_out, n_in, r, population_size, epoch, param_key,
-                    x.device, x.dtype
-                )
+                # Get pre-generated perturbations
+                all_A, all_B = layer_perturbations[name]
                 
                 # Select perturbations for each sample in the batch
-                A_selected = all_A[member_ids]  # (batch_size, m_out, r)
-                B_selected = all_B[member_ids]  # (batch_size, n_in, r)
+                A_batch = all_A[member_ids]  # (batch_size, m_out, r)
+                B_batch = all_B[member_ids]  # (batch_size, n_in, r)
                 
-                # Compute x @ B @ A.T using batched matmul
-                # current_input: (batch_size, n_in)
-                # B_selected: (batch_size, n_in, r)
-                # A_selected: (batch_size, m_out, r)
+                # Use vmap to compute perturbed forward for all samples
+                # vmap over: x (batch), A (batch), B (batch)
+                # W and bias are shared across the batch
+                vmapped_linear = vmap(
+                    partial(self._perturbed_linear, W=W, bias=bias),
+                    in_dims=(0, 0, 0)  # vmap over x, A, B
+                )
                 
-                # x @ B: (batch_size, n_in) @ (batch_size, n_in, r) -> (batch_size, r)
-                xB = torch.einsum('bi,bir->br', current_input, B_selected)
-                
-                # (x @ B) @ A.T: (batch_size, r) @ (batch_size, m_out, r).T -> (batch_size, m_out)
-                pert_output = torch.einsum('br,bor->bo', xB, A_selected)
-                
-                current_input = base_output + pert_output
+                current_input = vmapped_linear(current_input, A_batch, B_batch)
                 
             elif isinstance(module, (nn.ReLU, nn.Tanh, nn.Sigmoid, nn.GELU)):
                 current_input = module(current_input)

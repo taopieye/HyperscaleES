@@ -45,64 +45,52 @@ def create_mlp(input_dim: int, hidden_dim: int, output_dim: int, num_layers: int
 
 
 # =============================================================================
-# JAX EGGROLL Implementation (for comparison)
+# JAX EGGROLL - Using the ACTUAL implementation from hyperscalees.noiser.eggroll
 # =============================================================================
 
+# Import the real JAX EggRoll
+try:
+    from hyperscalees.noiser.eggroll import EggRoll
+    HAS_JAX_EGGROLL = HAS_JAX
+except ImportError:
+    HAS_JAX_EGGROLL = False
+
+
 def create_jax_mlp_params(input_dim: int, hidden_dim: int, output_dim: int, num_layers: int, key):
-    """Create JAX MLP parameters matching PyTorch structure."""
+    """Create JAX MLP parameters matching PyTorch structure (weights transposed for do_mm)."""
     params = []
     in_d = input_dim
     for i in range(num_layers - 1):
         key, k1, k2 = random.split(key, 3)
-        W = random.normal(k1, (in_d, hidden_dim)) * 0.01
+        # EggRoll.do_mm does x @ W.T, so W should be (out_dim, in_dim)
+        W = random.normal(k1, (hidden_dim, in_d)) * 0.01
         b = jnp.zeros(hidden_dim)
         params.append({'W': W, 'b': b})
         in_d = hidden_dim
-    key, k1, k2 = random.split(key, 3)
-    W = random.normal(k1, (in_d, output_dim)) * 0.01
+    key, k1 = random.split(key)
+    W = random.normal(k1, (output_dim, in_d)) * 0.01
     b = jnp.zeros(output_dim)
     params.append({'W': W, 'b': b})
     return params
 
 
-def jax_mlp_forward(params, x):
-    """Forward pass through JAX MLP."""
-    for i, layer in enumerate(params[:-1]):
-        x = x @ layer['W'] + layer['b']
-        x = jax.nn.relu(x)
-    x = x @ params[-1]['W'] + params[-1]['b']
-    return x
-
-
-def jax_generate_lowrank_factors(key, shape, rank):
-    """Generate low-rank factors for a parameter."""
-    k1, k2 = random.split(key)
-    # A: (rank, num_params), B: (rank,)
-    A = random.normal(k1, (rank, shape[0])) / jnp.sqrt(rank)
-    B = random.normal(k2, (rank,))
-    return A, B
-
-
-def jax_perturb_params_single(params, key, sigma, rank):
-    """Perturb parameters for a single population member."""
-    perturbed = []
-    for i, layer in enumerate(params):
-        layer_perturbed = {}
-        for name, param in layer.items():
-            key, subkey = random.split(key)
-            flat = param.flatten()
-            A, B = jax_generate_lowrank_factors(subkey, (flat.shape[0],), rank)
-            # Low-rank perturbation: sigma * B @ A
-            delta = sigma * jnp.dot(B, A)
-            layer_perturbed[name] = param + delta.reshape(param.shape)
-        perturbed.append(layer_perturbed)
-    return perturbed
-
-
-def jax_forward_single(params, x, key, sigma, rank):
-    """Forward pass with perturbed parameters for one member."""
-    perturbed = jax_perturb_params_single(params, key, sigma, rank)
-    return jax_mlp_forward(perturbed, x)
+def jax_eggroll_forward_single(params, x, frozen_noiser_params, noiser_params, base_key, iterinfo):
+    """
+    Forward pass using the ACTUAL EggRoll.do_mm() from the real implementation.
+    This is the ground truth we're comparing PyTorch against.
+    """
+    current = x
+    for layer_idx, layer in enumerate(params):
+        W = layer['W']
+        b = layer['b']
+        # Use the real EggRoll.do_mm - this is what we need to match!
+        layer_key = jax.random.fold_in(base_key, layer_idx)
+        current = EggRoll.do_mm(frozen_noiser_params, noiser_params, W, layer_key, iterinfo, current)
+        current = current + b
+        # ReLU for all but last layer
+        if layer_idx < len(params) - 1:
+            current = jax.nn.relu(current)
+    return current
 
 
 # =============================================================================
@@ -208,38 +196,41 @@ def benchmark_jax_batched_forward(
     num_iterations: int = 100,
     warmup: int = 10
 ):
-    """Benchmark JAX EGGROLL-equivalent batched forward."""
-    if not HAS_JAX:
+    """Benchmark the ACTUAL JAX EggRoll implementation."""
+    if not HAS_JAX_EGGROLL:
         return None, None
     
     key = random.PRNGKey(42)
     x = random.normal(key, (input_dim,))  # Single input, vmapped over pop
     
-    # Create forward function with sigma/rank captured in closure
-    def make_batched_forward(sigma_val, rank_val):
-        def forward_one(params, x, k):
-            return jax_forward_single(params, x, k, sigma_val, rank_val)
-        
-        @jit
-        def batched_forward(params, x, keys):
-            return vmap(lambda k: forward_one(params, x, k))(keys)
-        return batched_forward
+    # Initialize the real EggRoll noiser
+    frozen_noiser_params, noiser_params = EggRoll.init_noiser(
+        params, sigma=sigma, lr=0.01, rank=rank
+    )
+    base_key = random.PRNGKey(42)
     
-    batched_forward = make_batched_forward(sigma, rank)
+    # Create batched forward using the REAL EggRoll.do_mm
+    @jit
+    def batched_forward(params, x, member_ids):
+        def forward_one(member_id):
+            # iterinfo is (epoch, thread_id) - we use epoch=0
+            iterinfo = (0, member_id)
+            return jax_eggroll_forward_single(
+                params, x, frozen_noiser_params, noiser_params, base_key, iterinfo
+            )
+        return vmap(forward_one)(member_ids)
+    
+    member_ids = jnp.arange(pop_size)
     
     # Warmup
     for i in range(warmup):
-        key, subkey = random.split(key)
-        keys = random.split(subkey, pop_size)
-        _ = batched_forward(params, x, keys)
+        _ = batched_forward(params, x, member_ids)
         _.block_until_ready()
     
     # Benchmark
     start = time.perf_counter()
     for i in range(num_iterations):
-        key, subkey = random.split(key)
-        keys = random.split(subkey, pop_size)
-        outputs = batched_forward(params, x, keys)
+        outputs = batched_forward(params, x, member_ids)
         outputs.block_until_ready()
     elapsed = time.perf_counter() - start
     
@@ -255,47 +246,42 @@ def benchmark_jax_with_breakdown(
     num_iterations: int = 100,
     warmup: int = 10
 ):
-    """JAX benchmark with timing breakdown."""
-    if not HAS_JAX:
+    """JAX benchmark with timing breakdown using the REAL EggRoll."""
+    if not HAS_JAX_EGGROLL:
         return None
     
     key = random.PRNGKey(42)
     x = random.normal(key, (input_dim,))
     
-    # Create forward function with sigma/rank captured in closure
-    def make_batched_forward(sigma_val, rank_val):
-        def forward_one(params, x, k):
-            return jax_forward_single(params, x, k, sigma_val, rank_val)
-        
-        @jit
-        def batched_forward(params, x, keys):
-            return vmap(lambda k: forward_one(params, x, k))(keys)
-        return batched_forward
+    # Initialize the real EggRoll noiser
+    frozen_noiser_params, noiser_params = EggRoll.init_noiser(
+        params, sigma=sigma, lr=0.01, rank=rank
+    )
+    base_key = random.PRNGKey(42)
     
-    batched_forward = make_batched_forward(sigma, rank)
+    # Create batched forward using the REAL EggRoll.do_mm
+    @jit
+    def batched_forward(params, x, member_ids):
+        def forward_one(member_id):
+            iterinfo = (0, member_id)
+            return jax_eggroll_forward_single(
+                params, x, frozen_noiser_params, noiser_params, base_key, iterinfo
+            )
+        return vmap(forward_one)(member_ids)
+        return vmap(forward_one)(member_ids)
     
+    member_ids = jnp.arange(pop_size)
     timings = defaultdict(float)
     
     # Warmup
     for i in range(warmup):
-        key, subkey = random.split(key)
-        keys = random.split(subkey, pop_size)
-        _ = batched_forward(params, x, keys)
+        _ = batched_forward(params, x, member_ids)
         _.block_until_ready()
     
-    # Detailed timing
+    # Detailed timing - for real EggRoll, key generation is inside the forward
     for i in range(num_iterations):
-        # Time key generation (don't JIT - pop_size must be concrete)
         t0 = time.perf_counter()
-        key, *keys = random.split(key, pop_size + 1)
-        jax.block_until_ready(keys)
-        keys = jnp.stack(keys)
-        t1 = time.perf_counter()
-        timings['key_generation'] += t1 - t0
-        
-        # Time forward pass
-        t0 = time.perf_counter()
-        outputs = batched_forward(params, x, keys)
+        outputs = batched_forward(params, x, member_ids)
         outputs.block_until_ready()
         t1 = time.perf_counter()
         timings['batched_forward'] += t1 - t0
@@ -319,6 +305,7 @@ def main():
         print(f"CUDA Version: {torch.version.cuda}")
     
     print(f"JAX Available: {HAS_JAX}")
+    print(f"JAX EggRoll Available: {HAS_JAX_EGGROLL}")
     if HAS_JAX:
         print(f"JAX Backend: {JAX_BACKEND}")
     
@@ -371,49 +358,51 @@ def main():
         for name, ms in pt_breakdown.items():
             print(f"      {name}: {ms:.3f} ms")
         
-        # JAX benchmark
-        if HAS_JAX:
+        # JAX benchmark using the REAL EggRoll implementation
+        if HAS_JAX_EGGROLL:
             key = random.PRNGKey(42)
             jax_params = create_jax_mlp_params(input_dim, hidden_dim, output_dim, num_layers, key)
             
             jax_time, jax_shape = benchmark_jax_batched_forward(
                 jax_params, input_dim, pop_size, sigma, rank, num_iterations
             )
-            print(f"\n  JAX batched_forward: {jax_time*1000:.3f} ms")
-            print(f"    Throughput: {pop_size / jax_time:,.0f} evals/sec")
-            
-            # JAX timing breakdown
-            jax_breakdown = benchmark_jax_with_breakdown(
-                jax_params, input_dim, pop_size, sigma, rank, num_iterations
-            )
-            print(f"    Breakdown:")
-            for name, ms in jax_breakdown.items():
-                print(f"      {name}: {ms:.3f} ms")
-            
-            # Comparison
-            ratio = pt_time / jax_time
-            print(f"\n  → PyTorch/JAX ratio: {ratio:.2f}x")
-            
-            # Identify the bottleneck
-            pt_forward = pt_breakdown['batched_forward']
-            pt_overhead = pt_breakdown['context_enter'] + pt_breakdown['context_exit']
-            jax_forward = jax_breakdown['batched_forward']
-            jax_overhead = jax_breakdown['key_generation']
-            
-            print(f"\n  Analysis:")
-            print(f"    PyTorch overhead (ctx enter+exit): {pt_overhead:.3f} ms")
-            print(f"    JAX overhead (key generation):     {jax_overhead:.3f} ms")
-            print(f"    PyTorch forward only:              {pt_forward:.3f} ms")
-            print(f"    JAX forward only:                  {jax_forward:.3f} ms")
-            print(f"    Forward-only ratio:                {pt_forward/jax_forward:.2f}x")
+            if jax_time is not None:
+                print(f"\n  JAX EggRoll.do_mm: {jax_time*1000:.3f} ms")
+                print(f"    Throughput: {pop_size / jax_time:,.0f} evals/sec")
+                
+                # JAX timing breakdown
+                jax_breakdown = benchmark_jax_with_breakdown(
+                    jax_params, input_dim, pop_size, sigma, rank, num_iterations
+                )
+                if jax_breakdown:
+                    print(f"    Breakdown:")
+                    for name, ms in jax_breakdown.items():
+                        print(f"      {name}: {ms:.3f} ms")
+                
+                # Comparison
+                ratio = pt_time / jax_time
+                print(f"\n  → PyTorch/JAX ratio: {ratio:.2f}x")
+                
+                # Identify the bottleneck
+                pt_forward = pt_breakdown['batched_forward']
+                pt_overhead = pt_breakdown['context_enter'] + pt_breakdown['context_exit']
+                jax_forward = jax_breakdown.get('batched_forward', jax_time * 1000)
+                
+                print(f"\n  Analysis:")
+                print(f"    PyTorch overhead (ctx enter+exit): {pt_overhead:.3f} ms")
+                print(f"    PyTorch forward only:              {pt_forward:.3f} ms")
+                print(f"    JAX forward (incl. key gen):       {jax_forward:.3f} ms")
+                print(f"    Forward-only ratio:                {pt_forward/jax_forward:.2f}x")
+        else:
+            print(f"\n  JAX EggRoll not available - skipping comparison")
     
     print("\n" + "=" * 70)
     print("Key Insights:")
     print("=" * 70)
     print("""
-- 'context_enter' includes key derivation (fold_in) for all members
-- 'batched_forward' includes: noise generation + perturbation + forward
-- JAX fuses the entire forward (perturbation + matmul) into one XLA kernel
+- Using the REAL hyperscalees.noiser.eggroll.EggRoll implementation
+- EggRoll.do_mm() fuses: base matmul + low-rank perturbation in one call
+- JAX XLA compiles the entire vmapped forward into one fused kernel
 - PyTorch launches separate kernels for: noise gen, perturbation, each matmul
 
 If 'batched_forward' dominates, the bottleneck is kernel launch overhead.
@@ -421,7 +410,7 @@ If 'context_enter' dominates, the bottleneck is key generation.
 
 Solutions for kernel launch overhead:
 1. torch.compile with fullgraph=True (if model is static)
-2. CUDA graphs to capture and replay kernel sequences
+2. CUDA graphs to capture and replay kernel sequences  
 3. Custom Triton kernel to fuse perturbation + matmul
 """)
     print("=" * 70)

@@ -23,12 +23,13 @@ Usage:
         strategy.step(fitnesses)
 """
 
-from .strategy import EggrollStrategy
+from .strategy import EggrollStrategy, OpenESStrategy
 from .perturbation import PerturbationContext, Perturbation
 from .module import ESModule
 
 __all__ = [
     "EggrollStrategy",
+    "OpenESStrategy",
     "PerturbationContext", 
     "Perturbation",
     "ESModule",

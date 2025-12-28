@@ -32,10 +32,14 @@ class Perturbation:
         A: Factor matrix (out_features, rank), scaled by sigma
         B: Factor matrix (in_features, rank)
         sigma: The noise scale used to generate A
+        member_id: The population member index (optional)
+        epoch: The epoch when this perturbation was generated (optional)
     """
     A: torch.Tensor  # (out_features, rank)
     B: torch.Tensor  # (in_features, rank)
     sigma: float
+    member_id: Optional[int] = None
+    epoch: Optional[int] = None
     
     @property
     def factors(self) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -60,6 +64,28 @@ class Perturbation:
     def shape(self) -> Tuple[int, int]:
         """Get the shape of the full perturbation matrix (without materializing it)."""
         return (self.A.shape[0], self.B.shape[0])
+    
+    def storage_stats(self) -> Dict[str, Any]:
+        """
+        Get storage statistics for this perturbation.
+        
+        Returns:
+            Dictionary with:
+            - factored_size: Elements stored in factored form
+            - full_size: Elements that would be stored in full form
+            - savings_ratio: Ratio of factored to full storage
+        """
+        out_features, in_features = self.shape
+        rank = self.rank
+        factored_size = rank * (out_features + in_features)
+        full_size = out_features * in_features
+        return {
+            "factored_size": factored_size,
+            "full_size": full_size,
+            "savings_ratio": factored_size / full_size if full_size > 0 else 0,
+            "rank": rank,
+            "shape": self.shape,
+        }
 
 
 class PerturbationContext:
@@ -116,12 +142,14 @@ class PerturbationContext:
     def __enter__(self) -> "PerturbationContext":
         """Enter the perturbation context."""
         self._active = True
+        self._strategy._current_context = self  # Set for nested context check
         self._generate_all_factors()
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Exit the perturbation context."""
         self._active = False
+        self._strategy._current_context = None  # Clear for nested context check
         self._cached_factors.clear()
         self._current_member_id = None
         self._restore_original_forwards()
@@ -246,6 +274,13 @@ class PerturbationContext:
         # Default member_ids: one-to-one mapping
         if member_ids is None:
             member_ids = torch.arange(x.shape[0], device=device)
+        
+        # Handle empty batch
+        if member_ids.numel() == 0:
+            raise ValueError(
+                "Empty population batch. member_ids has zero elements. "
+                "Provide at least one member to evaluate."
+            )
         
         # Validate member_ids
         if member_ids.max() >= self._population_size:

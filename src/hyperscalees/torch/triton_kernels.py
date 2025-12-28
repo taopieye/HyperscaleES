@@ -518,7 +518,9 @@ def generate_lowrank_factors_torch(
         combined = torch.randn(out_features + in_features, rank, generator=gen, dtype=dtype)
         B[i] = combined[:in_features].to(device)
         # A is scaled by sigma with appropriate sign for antithetic
-        A[i] = combined[in_features:].to(device) * sigma * sign
+        # Divide by sqrt(rank) to normalize perturbation magnitude across different ranks
+        # This ensures ||ΔW||_F is roughly independent of rank choice
+        A[i] = combined[in_features:].to(device) * sigma * sign / math.sqrt(rank)
         
     return A, B
 

@@ -226,12 +226,15 @@ def fused_perturbed_linear_kernel(
         sign = tl.full((BLOCK_M,), 1.0, dtype=tl.float32)
     
     # Fold in layer index to base key
-    # Using simple mixing: key ^ (layer_idx * large_prime)
-    layer_key = base_key ^ (layer_idx * 0x9E3779B97F4A7C15)
+    # Using simple mixing with 32-bit constants that fit in Triton's int32
+    # We mix layer_idx into both halves of the 64-bit key
+    LAYER_MIX: tl.constexpr = 0x9E3779B9  # 32-bit golden ratio constant
+    layer_key = base_key ^ (layer_idx.to(tl.int64) * LAYER_MIX)
     
     # Member keys: one per batch element
     # member_key[m] = layer_key ^ (effective_member[m] * another_prime)
-    member_keys = layer_key ^ (effective_member.to(tl.int64) * 0xBB67AE8584CAA73B)
+    MEMBER_MIX: tl.constexpr = 0xBB67AE85  # 32-bit mixing constant
+    member_keys = layer_key ^ (effective_member.to(tl.int64) * MEMBER_MIX)
     
     # Scale factor for low-rank (matches JAX: sigma / sqrt(rank))
     scale = sigma / tl.sqrt(rank.to(tl.float32)) * sign
@@ -415,8 +418,8 @@ def generate_lowrank_factors_kernel(
         effective_member = member_ids
         sign = tl.full((BLOCK_B,), 1.0, dtype=tl.float32)
     
-    layer_key = base_key ^ (layer_idx * 0x9E3779B97F4A7C15)
-    member_keys = layer_key ^ (effective_member.to(tl.int64) * 0xBB67AE8584CAA73B)
+    layer_key = base_key ^ (layer_idx.to(tl.int64) * 0x9E3779B9)
+    member_keys = layer_key ^ (effective_member.to(tl.int64) * 0xBB67AE85)
     
     scale = sigma / tl.sqrt(rank.to(tl.float32))
     

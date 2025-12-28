@@ -30,7 +30,10 @@ Example usage:
         strategy.step(fitnesses)
 """
 
-from .strategy import EggrollStrategy, OpenESStrategy, BaseStrategy
+from .strategy import (
+    EggrollStrategy, OpenESStrategy, BaseStrategy,
+    EggrollConfig, OpenESConfig
+)
 from .perturbation import Perturbation, PerturbationContext
 from .module import ESModule, LowRankLinear
 
@@ -38,6 +41,8 @@ __all__ = [
     'EggrollStrategy',
     'OpenESStrategy', 
     'BaseStrategy',
+    'EggrollConfig',
+    'OpenESConfig',
     'Perturbation',
     'PerturbationContext',
     'ESModule',

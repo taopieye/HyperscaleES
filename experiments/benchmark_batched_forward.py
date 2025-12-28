@@ -262,10 +262,6 @@ def benchmark_jax_with_breakdown(
     key = random.PRNGKey(42)
     x = random.normal(key, (input_dim,))
     
-    @jit
-    def split_keys(key, n):
-        return random.split(key, n + 1)
-    
     # Create forward function with sigma/rank captured in closure
     def make_batched_forward(sigma_val, rank_val):
         def forward_one(params, x, k):
@@ -289,12 +285,11 @@ def benchmark_jax_with_breakdown(
     
     # Detailed timing
     for i in range(num_iterations):
-        # Time key generation
+        # Time key generation (don't JIT - pop_size must be concrete)
         t0 = time.perf_counter()
-        split_result = split_keys(key, pop_size)
-        split_result.block_until_ready()
-        key = split_result[0]
-        keys = split_result[1:]
+        key, *keys = random.split(key, pop_size + 1)
+        jax.block_until_ready(keys)
+        keys = jnp.stack(keys)
         t1 = time.perf_counter()
         timings['key_generation'] += t1 - t0
         

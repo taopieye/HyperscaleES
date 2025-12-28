@@ -15,6 +15,8 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Iterator, List, Tuple, Union, ContextManager, Set, Callable
 from dataclasses import dataclass, field
 
+from torch.func import vmap
+
 from .perturbation import Perturbation, PerturbationContext
 
 
@@ -659,50 +661,6 @@ class EggrollStrategy(BaseStrategy):
         """Perturbation rank."""
         return self._rank
     
-    def _get_generator_for_perturbation(
-        self,
-        member_id: int,
-        epoch: int,
-        param_key: int
-    ) -> Tuple[torch.Generator, int]:
-        """
-        Get a deterministic generator and seed for a specific perturbation.
-        
-        The generator is seeded based on:
-        - Base seed
-        - Epoch (considering noise_reuse)
-        - Member ID (considering antithetic pairing)
-        - Parameter key
-        
-        Returns:
-            Tuple of (CPU generator, seed) for deterministic noise generation.
-            We use CPU generator to avoid CUDA generator issues.
-        """
-        # Compute effective epoch (for noise reuse)
-        if self._noise_reuse == 0:
-            effective_epoch = 0
-        else:
-            effective_epoch = epoch // self._noise_reuse
-        
-        # Compute effective member ID (for antithetic sampling)
-        if self._antithetic:
-            effective_member = member_id // 2
-        else:
-            effective_member = member_id
-        
-        # Combine into a single seed
-        combined_seed = (
-            self._seed * 1000003 + 
-            effective_epoch * 1009 + 
-            effective_member * 10007 + 
-            param_key
-        )
-        
-        seed = combined_seed % (2**31 - 1)
-        gen = torch.Generator()  # CPU generator
-        gen.manual_seed(seed)
-        return gen, seed
-    
     def _sample_perturbation(
         self,
         param: torch.Tensor,
@@ -713,37 +671,54 @@ class EggrollStrategy(BaseStrategy):
         """
         Sample a low-rank perturbation for a parameter.
         
+        Uses the same seeding as _generate_all_perturbations to ensure consistency.
+        
         For antithetic sampling:
         - Even member_id (0, 2, 4, ...): +ε
         - Odd member_id (1, 3, 5, ...): -ε
         """
         if param.dim() < 2:
-            # For 1D parameters (biases), treat as (n, 1) matrix
             m, n = param.shape[0], 1
             is_1d = True
         else:
-            # For 2D+ parameters, use first two dimensions
             m, n = param.shape[0], param.shape[1]
             is_1d = False
         
-        r = min(self._rank, m, n)  # Rank can't exceed matrix dimensions
+        r = min(self._rank, m, n)
         
-        # Get deterministic generator (on CPU)
+        # Compute effective epoch for noise reuse
+        if self._noise_reuse == 0:
+            effective_epoch = 0
+        else:
+            effective_epoch = epoch // self._noise_reuse
+        
+        # For antithetic, pairs share same base noise
+        if self._antithetic:
+            effective_member = member_id // 2
+        else:
+            effective_member = member_id
+        
+        # Use same master seed as _generate_all_perturbations
         param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
-        gen, _ = self._get_generator_for_perturbation(member_id, epoch, param_key)
+        master_seed = (self._seed * 1000003 + effective_epoch * 1009 + param_key) % (2**31 - 1)
+        gen = torch.Generator(device='cpu')
+        gen.manual_seed(master_seed)
         
-        # Generate low-rank factors on CPU then move to device
-        # Combined tensor for both A and B, then split
-        combined = torch.randn(
-            (m + n, r), 
+        # Generate (effective_member + 1) rows to get this member's values
+        # This is inefficient for single member but maintains consistency
+        all_random = torch.randn(
+            (effective_member + 1, m + n, r),
             dtype=param.dtype,
             generator=gen
-        ).to(param.device)
+        )
+        
+        # Extract this member's row
+        combined = all_random[effective_member].to(param.device)
         
         A = combined[:m]  # (m, r)
         B = combined[m:]  # (n, r)
         
-        # Apply sigma scaling (normalized by sqrt(rank) for consistent magnitude)
+        # Apply sigma scaling
         sigma_scaled = self._sigma / math.sqrt(r)
         
         # Apply antithetic sign
@@ -753,10 +728,8 @@ class EggrollStrategy(BaseStrategy):
             sign = 1.0
         
         A = A * sigma_scaled * sign
-        # B keeps its original sign (perturbation is A @ B.T)
         
         if is_1d:
-            # Squeeze back to 1D
             A = A.squeeze(-1)
             B = B.squeeze(-1)
         
@@ -785,8 +758,8 @@ class EggrollStrategy(BaseStrategy):
         """
         Generate all low-rank perturbation factors for all population members.
         
-        Uses the same seeding as _sample_perturbation to ensure consistency
-        between batched_forward and get_factors.
+        Generates all random numbers in a single tensor operation, then applies
+        sigma scaling and antithetic signs vectorized.
         
         Returns:
             all_A: (population_size, m_out, r) - already scaled by sigma and antithetic sign
@@ -799,22 +772,54 @@ class EggrollStrategy(BaseStrategy):
             m_out, n_in = param.shape[0], param.shape[1]
         r = min(self._rank, m_out, n_in)
         
-        # Pre-allocate tensors
-        all_A = torch.empty((population_size, m_out, r), dtype=param.dtype, device=param.device)
-        all_B = torch.empty((population_size, n_in, r), dtype=param.dtype, device=param.device)
+        # Compute effective epoch for noise reuse
+        if self._noise_reuse == 0:
+            effective_epoch = 0
+        else:
+            effective_epoch = epoch // self._noise_reuse
         
-        # Generate perturbations using the same seeding as _sample_perturbation
-        # This ensures consistency between batched_forward and get_factors
-        for i in range(population_size):
-            pert = self._sample_perturbation(param, i, epoch, param_name)
-            A, B = pert.factors
-            # _sample_perturbation returns 2D for 1D params, handle that
-            if param.dim() < 2:
-                all_A[i] = A.unsqueeze(-1) if A.dim() == 1 else A
-                all_B[i] = B.unsqueeze(-1) if B.dim() == 1 else B
-            else:
-                all_A[i] = A
-                all_B[i] = B
+        # For antithetic sampling, pairs share the same base noise
+        # Member 0,1 share noise from seed 0; members 2,3 share from seed 1, etc.
+        if self._antithetic:
+            num_unique = (population_size + 1) // 2
+        else:
+            num_unique = population_size
+        
+        # Generate all random factors at once using a master seed
+        param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
+        master_seed = (self._seed * 1000003 + effective_epoch * 1009 + param_key) % (2**31 - 1)
+        gen = torch.Generator(device='cpu')
+        gen.manual_seed(master_seed)
+        
+        # Generate (num_unique, m_out + n_in, r) random values
+        all_random = torch.randn(
+            (num_unique, m_out + n_in, r),
+            dtype=param.dtype,
+            generator=gen
+        ).to(param.device)
+        
+        # Split: A is first m_out, B is last n_in (matching _sample_perturbation)
+        unique_A = all_random[:, :m_out, :]  # (num_unique, m_out, r)
+        unique_B = all_random[:, m_out:, :]  # (num_unique, n_in, r)
+        
+        # Expand to full population (for antithetic, duplicate each)
+        if self._antithetic:
+            # Each pair (0,1), (2,3), etc. uses the same base noise
+            indices = torch.arange(population_size, device=param.device) // 2
+            all_A = unique_A[indices]  # (population_size, m_out, r)
+            all_B = unique_B[indices]  # (population_size, n_in, r)
+            
+            # Apply antithetic sign to A: even members +, odd members -
+            signs = torch.ones(population_size, 1, 1, device=param.device, dtype=param.dtype)
+            signs[1::2] = -1.0
+            all_A = all_A * signs
+        else:
+            all_A = unique_A
+            all_B = unique_B
+        
+        # Apply sigma scaling
+        sigma_scaled = self._sigma / math.sqrt(r)
+        all_A = all_A * sigma_scaled
         
         return all_A, all_B
     
@@ -827,14 +832,15 @@ class EggrollStrategy(BaseStrategy):
         population_size: int
     ) -> torch.Tensor:
         """
-        Efficient batched forward pass with low-rank perturbations.
+        Efficient batched forward pass with low-rank perturbations using vmap.
         
-        For each linear layer, computes (following JAX EGGROLL do_mm):
-            output = x @ W.T + bias + x @ B @ A.T
+        Following JAX EGGROLL pattern:
+        1. Pre-generate all perturbation factors (A, B) in one tensor op
+        2. Use vmap to compute perturbed forward for each population member
         
-        Where A, B are the low-rank perturbation factors.
-        Uses einsum for efficient batched computation without Python loops.
+        For each linear layer computes: output = x @ W.T + bias + x @ B @ A.T
         """
+        batch_size = x.shape[0]
         current_input = x
         
         # Build param_name -> param mapping once
@@ -874,20 +880,19 @@ class EggrollStrategy(BaseStrategy):
                 A_batch = all_A[member_ids]  # (batch_size, m_out, r)
                 B_batch = all_B[member_ids]  # (batch_size, n_in, r)
                 
-                # Compute: x @ W.T + bias + x @ B @ A.T
-                # Base forward
-                base_out = current_input @ W.T  # (batch, m_out)
-                if bias is not None:
-                    base_out = base_out + bias
+                # Define single-sample forward (captures W, bias)
+                # x: (n_in,), A: (m_out, r), B: (n_in, r)
+                def perturbed_linear(x_single: torch.Tensor, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+                    # Base: x @ W.T + bias
+                    out = x_single @ W.T
+                    if bias is not None:
+                        out = out + bias
+                    # Perturbation: x @ B @ A.T
+                    out = out + (x_single @ B) @ A.T
+                    return out
                 
-                # Low-rank perturbation: x @ B @ A.T
-                # x: (batch, n_in), B: (batch, n_in, r), A: (batch, m_out, r)
-                # x @ B -> einsum('bi,bir->br', x, B) -> (batch, r)
-                # then @ A.T -> einsum('br,bor->bo', ..., A) -> (batch, m_out)
-                # Combined: einsum('bi,bir,bor->bo', x, B, A)
-                perturbation = torch.einsum('bi,bir,bor->bo', current_input, B_batch, A_batch)
-                
-                current_input = base_out + perturbation
+                # vmap over batch dimension
+                current_input = vmap(perturbed_linear)(current_input, A_batch, B_batch)
                 
             elif isinstance(module, (nn.ReLU, nn.Tanh, nn.Sigmoid, nn.GELU)):
                 current_input = module(current_input)

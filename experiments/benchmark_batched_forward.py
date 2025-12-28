@@ -215,18 +215,23 @@ def benchmark_jax_batched_forward(
     key = random.PRNGKey(42)
     x = random.normal(key, (input_dim,))  # Single input, vmapped over pop
     
-    # Create vmapped forward
-    @jit
-    def batched_forward(params, x, keys, sigma, rank):
-        def forward_one(k):
-            return jax_forward_single(params, x, k, sigma, rank)
-        return vmap(forward_one)(keys)
+    # Create forward function with sigma/rank captured in closure
+    def make_batched_forward(sigma_val, rank_val):
+        def forward_one(params, x, k):
+            return jax_forward_single(params, x, k, sigma_val, rank_val)
+        
+        @jit
+        def batched_forward(params, x, keys):
+            return vmap(lambda k: forward_one(params, x, k))(keys)
+        return batched_forward
+    
+    batched_forward = make_batched_forward(sigma, rank)
     
     # Warmup
     for i in range(warmup):
         key, subkey = random.split(key)
         keys = random.split(subkey, pop_size)
-        _ = batched_forward(params, x, keys, sigma, rank)
+        _ = batched_forward(params, x, keys)
         _.block_until_ready()
     
     # Benchmark
@@ -234,7 +239,7 @@ def benchmark_jax_batched_forward(
     for i in range(num_iterations):
         key, subkey = random.split(key)
         keys = random.split(subkey, pop_size)
-        outputs = batched_forward(params, x, keys, sigma, rank)
+        outputs = batched_forward(params, x, keys)
         outputs.block_until_ready()
     elapsed = time.perf_counter() - start
     
@@ -261,11 +266,17 @@ def benchmark_jax_with_breakdown(
     def split_keys(key, n):
         return random.split(key, n + 1)
     
-    @jit
-    def batched_forward(params, x, keys, sigma, rank):
-        def forward_one(k):
-            return jax_forward_single(params, x, k, sigma, rank)
-        return vmap(forward_one)(keys)
+    # Create forward function with sigma/rank captured in closure
+    def make_batched_forward(sigma_val, rank_val):
+        def forward_one(params, x, k):
+            return jax_forward_single(params, x, k, sigma_val, rank_val)
+        
+        @jit
+        def batched_forward(params, x, keys):
+            return vmap(lambda k: forward_one(params, x, k))(keys)
+        return batched_forward
+    
+    batched_forward = make_batched_forward(sigma, rank)
     
     timings = defaultdict(float)
     
@@ -273,7 +284,7 @@ def benchmark_jax_with_breakdown(
     for i in range(warmup):
         key, subkey = random.split(key)
         keys = random.split(subkey, pop_size)
-        _ = batched_forward(params, x, keys, sigma, rank)
+        _ = batched_forward(params, x, keys)
         _.block_until_ready()
     
     # Detailed timing
@@ -289,7 +300,7 @@ def benchmark_jax_with_breakdown(
         
         # Time forward pass
         t0 = time.perf_counter()
-        outputs = batched_forward(params, x, keys, sigma, rank)
+        outputs = batched_forward(params, x, keys)
         outputs.block_until_ready()
         t1 = time.perf_counter()
         timings['batched_forward'] += t1 - t0

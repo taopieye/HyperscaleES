@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 from torch.func import vmap
 
 from .perturbation import Perturbation, PerturbationContext
-from .triton_kernels import fused_perturbed_linear
 
 
 # ==============================================================================
@@ -1036,20 +1035,38 @@ class EggrollStrategy(BaseStrategy):
         population_size: int
     ) -> torch.Tensor:
         """
-        Efficient batched forward pass with low-rank perturbations using Triton kernels.
+        Efficient batched forward pass with low-rank perturbations.
         
         Key optimizations:
         1. Layer specs pre-computed in setup() - no dict lookups or isinstance() in hot path
-        2. Fused Triton kernels for RNG + perturbation computation
+        2. Batched perturbation generation for all members at once
         3. Avoid vmap dispatch overhead entirely
         
         For each linear layer computes: output = x @ W.T + bias + x @ B @ A.T
+        
+        Uses same RNG as _sample_perturbation to ensure consistency during step().
         """
         # Compute effective epoch for noise reuse
         effective_epoch = 0 if self._noise_reuse == 0 else epoch // self._noise_reuse
         
         # Base key incorporating seed and epoch (computed once)
-        base_key = (self._seed * 2654435761 + effective_epoch * 2246822519) & 0xFFFFFFFF
+        base_key = torch.tensor(
+            (self._seed * 2654435761 + effective_epoch * 2246822519) & 0xFFFFFFFF,
+            dtype=torch.int64, device=x.device
+        )
+        
+        # Compute effective member IDs and signs (for antithetic sampling)
+        if self._antithetic:
+            effective_member_ids = member_ids // 2
+            signs = (1.0 - 2.0 * (member_ids % 2).float()).unsqueeze(-1)  # (N, 1)
+        else:
+            effective_member_ids = member_ids
+            signs = torch.ones(member_ids.shape[0], 1, device=x.device, dtype=x.dtype)
+        
+        # Pre-compute per-member keys
+        member_keys = torch.stack([
+            _fold_in(base_key, mid) for mid in effective_member_ids
+        ])
         
         # Use cached layer specs for fast iteration
         current = x  # (N, input_dim)
@@ -1058,15 +1075,43 @@ class EggrollStrategy(BaseStrategy):
             op_type = layer_spec[0]
             
             if op_type == 'linear':
-                _, W, bias, param_key, m, n_in, evolve = layer_spec
+                _, W, bias, param_key, m_out, n_in, evolve = layer_spec
                 
                 if evolve:
-                    # Fused Triton kernel: matmul + perturbation
-                    current = fused_perturbed_linear(
-                        current, W, bias,
-                        base_key, member_ids, param_key,
-                        self._sigma, self._rank, self._antithetic
-                    )
+                    r = min(self._rank, m_out, n_in)
+                    sigma_scaled = self._sigma / math.sqrt(r)
+                    
+                    # Base matmul for all members
+                    base_out = current @ W.T  # (N, m_out)
+                    if bias is not None:
+                        base_out = base_out + bias
+                    
+                    # Generate perturbations for all members at once
+                    # Stack factors for all members
+                    all_A = []
+                    all_B = []
+                    param_key_tensor = torch.tensor(param_key, dtype=torch.int64, device=x.device)
+                    
+                    for i, member_key in enumerate(member_keys):
+                        layer_key = _fold_in(member_key, param_key_tensor)
+                        factors = _random_normal(layer_key, (m_out + n_in, r), x.dtype, x.device)
+                        A = factors[:m_out]   # (m_out, r)
+                        B = factors[m_out:]   # (n_in, r)
+                        all_A.append(A)
+                        all_B.append(B)
+                    
+                    A_stacked = torch.stack(all_A)  # (N, m_out, r)
+                    B_stacked = torch.stack(all_B)  # (N, n_in, r)
+                    
+                    # Apply sigma and antithetic sign
+                    A_stacked = A_stacked * (sigma_scaled * signs.unsqueeze(-1))
+                    
+                    # Batched low-rank perturbation: x @ B @ A.T for each member
+                    # current: (N, n_in), B_stacked: (N, n_in, r), A_stacked: (N, m_out, r)
+                    xB = torch.bmm(current.unsqueeze(1), B_stacked).squeeze(1)  # (N, r)
+                    pert = torch.bmm(xB.unsqueeze(1), A_stacked.transpose(1, 2)).squeeze(1)  # (N, m_out)
+                    
+                    current = base_out + pert
                 else:
                     # Non-evolved layers: standard matmul
                     current = current @ W.T

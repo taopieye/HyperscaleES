@@ -6,6 +6,127 @@ This test suite defines the **target API** for the PyTorch implementation. Tests
 
 ---
 
+## ⚠️ CRITICAL IMPLEMENTATION REQUIREMENTS ⚠️
+
+### Understanding the Core JAX Algorithm
+
+The reference EGGROLL implementation in JAX has two key algorithmic insights that **MUST** be preserved in the PyTorch port:
+
+#### 1. Low-Rank Perturbations
+
+Instead of materializing full perturbation matrices, EGGROLL keeps perturbations in factored form:
+
+```python
+# JAX reference (from noiser/eggroll.py):
+def get_lora_update_params(frozen_noiser_params, base_sigma, iterinfo, param, key):
+    a, b = param.shape
+    lora_params = jax.random.normal(key, (a+b, rank), dtype=param.dtype)
+    B = lora_params[:b]  # b x r
+    A = lora_params[b:]  # a x r
+    return A * sigma, B  # Never compute A @ B.T explicitly!
+```
+
+The forward pass computes `x @ W.T + x @ B @ A.T` — same result as `x @ (W + A @ B.T).T`, but with **O(r × (m + n))** memory instead of **O(m × n)**.
+
+#### 2. On-the-Fly PRNG with vmap
+
+This is the key to EGGROLL's parallelism. The JAX implementation uses **on-the-fly, deterministic PRNG** via `jax.random.fold_in`:
+
+```python
+# JAX reference: noise is generated PER-THREAD, ON-THE-FLY
+key = jax.random.fold_in(jax.random.fold_in(base_key, epoch), thread_id)
+noise = jax.random.normal(key, shape)
+
+# Then vmapped across all population members:
+A, B = jax.vmap(get_lora_update_params, in_axes=(None, 0, None, None))(
+    sigma, iterinfo, param, key
+)
+```
+
+**Why this matters:** Each thread/population-member generates its own noise independently. There's no central noise buffer. This means:
+- Memory usage is **O(rank)** per thread, not **O(population × rank)**
+- Noise generation is **embarrassingly parallel** — every GPU thread can compute its own noise
+- The same noise can be **regenerated** during the update step without storing it
+
+### PyTorch Implementation Requirements
+
+The PyTorch implementation **MUST** replicate this pattern. Standard PyTorch operations won't cut it because `torch.randn()` is sequential and uses a global RNG state.
+
+**Required approach — choose ONE:**
+
+#### Option A: Triton Kernels (STRONGLY PREFERRED)
+
+Write custom Triton kernels that:
+1. Accept a base seed + (epoch, member_id) as inputs
+2. Use a fast, parallelizable PRNG (Philox, Threefry, or similar) **per-thread**
+3. Generate low-rank factors A and B on-the-fly during the forward pass
+4. Regenerate the same noise during the backward/update pass using the same seed
+
+```python
+# Pseudocode for the Triton kernel pattern:
+@triton.jit
+def perturbed_matmul_kernel(
+    x_ptr, W_ptr, out_ptr,
+    seed, epoch, member_id,  # Deterministic noise params
+    rank, sigma,
+    ...
+):
+    # Each thread computes its portion of:
+    # out = x @ W.T + x @ B @ A.T
+    # where A, B are generated on-the-fly from (seed, epoch, member_id)
+    
+    pid = tl.program_id(0)
+    
+    # Generate noise for this thread's portion of A and B
+    # using Philox PRNG seeded with (seed ^ epoch ^ member_id ^ pid)
+    local_key = philox_seed(seed, epoch, member_id, pid)
+    noise = philox_randn(local_key, ...)
+    
+    # Compute perturbed output
+    ...
+```
+
+#### Option B: Custom CUDA C++ Kernels (Fallback)
+
+If Triton doesn't provide enough control, write CUDA C++ kernels with the same pattern:
+- Per-thread PRNG state (cuRAND's Philox works well)
+- On-the-fly noise generation
+- No global noise buffers
+
+### What NOT To Do
+
+❌ **DO NOT** pre-generate all noise into a tensor:
+```python
+# BAD: This defeats the purpose of EGGROLL
+noise = torch.randn(population_size, param.numel())  # O(pop × params) memory!
+```
+
+❌ **DO NOT** use `torch.Generator` with sequential sampling:
+```python
+# BAD: Sequential, can't parallelize across population
+for member in range(population_size):
+    noise[member] = torch.randn(shape, generator=gen)
+```
+
+❌ **DO NOT** materialize the full perturbation matrix:
+```python
+# BAD: O(m × n) memory per population member
+perturbed_W = W + A @ B.T  
+```
+
+### Implementation Checklist
+
+Before considering the PyTorch port complete, verify:
+
+- [ ] Noise is generated **per-thread** using a parallelizable PRNG (Philox/Threefry)
+- [ ] The same (seed, epoch, member_id) always produces the same noise (determinism)
+- [ ] Memory scales as **O(rank × (m + n))**, not O(m × n) per population member
+- [ ] Forward pass computes `x @ W.T + x @ B @ A.T`, never `x @ (W + A @ B.T).T`
+- [ ] Update step can regenerate noise without storing it
+- [ ] Batched forward evaluates **all population members in one kernel launch**
+
+---
+
 ## Quick Start
 
 ### Supervised Learning (with DataLoader)
@@ -427,7 +548,7 @@ with strategy.perturb(population_size=64, epoch=0) as pop:
 Each test file covers a core concept:
 
 ```
-tests/torch/
+tests/torch_tests/
 ├── README.md                           # This file
 ├── conftest.py                         # Shared fixtures
 ├── test_strategy_api.py                # Strategy interface contract
@@ -440,8 +561,10 @@ tests/torch/
 ├── test_parameter_updates.py           # ES gradient estimation
 ├── test_model_integration.py           # nn.Module compatibility
 ├── test_rl_integration.py              # RL environment patterns
-└── test_distributed.py                 # Multi-GPU (future)
+└── test_distributed.py                 # Multi-GPU support
 ```
+
+**Note:** All tests above are REQUIRED. Do not add extra test files (e.g., `test_efficiency_correctness.py`, `test_triton_kernels.py`) — efficiency and kernel correctness should be verified within the relevant domain tests above.
 
 ---
 
@@ -449,13 +572,13 @@ tests/torch/
 
 ```bash
 # Run all PyTorch tests
-pytest tests/torch/ -v
+pytest tests/torch_tests/ -v
 
 # Run a specific concept
-pytest tests/torch/test_low_rank_perturbations.py -v
+pytest tests/torch_tests/test_low_rank_perturbations.py -v
 
 # Skip unimplemented features
-pytest tests/torch/ -v -m "not unimplemented"
+pytest tests/torch_tests/ -v -m "not unimplemented"
 ```
 
 ---
@@ -487,7 +610,9 @@ Tests are written first — check them off as you implement:
 - [ ] `test_parameter_updates.py` — ES updates
 - [ ] `test_model_integration.py` — PyTorch integration
 - [ ] `test_rl_integration.py` — RL environment compatibility
-- [ ] `test_distributed.py` — Multi-GPU (future)
+- [ ] `test_distributed.py` — Multi-GPU support
+
+**Do not add additional test files.** If you need to test implementation details (e.g., Triton kernel correctness), add those tests to the appropriate domain file above.
 
 ---
 

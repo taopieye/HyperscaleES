@@ -23,46 +23,66 @@ from .triton_kernels import (
 @dataclass
 class Perturbation:
     """
-    A single low-rank perturbation for a parameter.
+    A perturbation for a parameter.
     
-    The perturbation is stored in factored form: ΔW = A @ B.T
-    This representation has O(r * (m + n)) memory instead of O(m * n).
+    For 2D parameters (weights):
+        The perturbation is stored in factored form: ΔW = A @ B.T
+        This representation has O(r * (m + n)) memory instead of O(m * n).
+    
+    For 1D parameters (biases):
+        The perturbation is stored directly in A, with B=None.
+        This represents Δb = A (no low-rank factorization needed).
     
     Attributes:
-        A: Factor matrix (out_features, rank), scaled by sigma
-        B: Factor matrix (in_features, rank)
-        sigma: The noise scale used to generate A
+        A: Factor matrix (out_features, rank) for 2D, or noise vector (size,) for 1D
+        B: Factor matrix (in_features, rank) for 2D, or None for 1D
+        sigma: The noise scale used to generate the perturbation
         member_id: The population member index (optional)
         epoch: The epoch when this perturbation was generated (optional)
     """
-    A: torch.Tensor  # (out_features, rank)
-    B: torch.Tensor  # (in_features, rank)
+    A: torch.Tensor  # (out_features, rank) for 2D, (size,) for 1D
+    B: Optional[torch.Tensor]  # (in_features, rank) for 2D, None for 1D
     sigma: float
     member_id: Optional[int] = None
     epoch: Optional[int] = None
     
     @property
-    def factors(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Get the low-rank factors (A, B)."""
+    def is_1d(self) -> bool:
+        """Check if this is a 1D (bias) perturbation."""
+        return self.B is None
+    
+    @property
+    def factors(self) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Get the low-rank factors (A, B). B is None for 1D perturbations."""
         return self.A, self.B
     
     def as_matrix(self) -> torch.Tensor:
         """
-        Reconstruct the full perturbation matrix.
+        Reconstruct the full perturbation tensor.
         
-        WARNING: This materializes O(m * n) memory. Use only for testing/debugging.
-        In production, use the factored form via batched_forward.
+        For 2D: returns A @ B.T (materializes O(m * n) memory)
+        For 1D: returns A directly (already full form)
+        
+        WARNING: For 2D params, this materializes O(m * n) memory. 
+        Use only for testing/debugging.
         """
+        if self.B is None:
+            # 1D perturbation - A is the direct noise
+            return self.A
         return self.A @ self.B.t()
     
     @property
     def rank(self) -> int:
-        """Get the rank of this perturbation."""
+        """Get the rank of this perturbation (1 for 1D params)."""
+        if self.B is None:
+            return 1  # 1D perturbations are effectively rank-1
         return self.A.shape[1]
     
     @property
-    def shape(self) -> Tuple[int, int]:
-        """Get the shape of the full perturbation matrix (without materializing it)."""
+    def shape(self) -> Tuple[int, ...]:
+        """Get the shape of the full perturbation tensor (without materializing it)."""
+        if self.B is None:
+            return tuple(self.A.shape)
         return (self.A.shape[0], self.B.shape[0])
     
     def storage_stats(self) -> Dict[str, Any]:
@@ -73,8 +93,21 @@ class Perturbation:
             Dictionary with:
             - low_rank_elements: Elements stored in factored form
             - full_rank_elements: Elements that would be stored in full form
-            - savings_ratio: Ratio of factored to full storage
+            - savings_ratio: Ratio of full to factored storage (how much we save)
         """
+        if self.B is None:
+            # 1D perturbation - no savings from factorization
+            size = self.A.numel()
+            return {
+                "low_rank_elements": size,
+                "full_rank_elements": size,
+                "factored_size": size,
+                "full_size": size,
+                "savings_ratio": 1.0,
+                "rank": 1,
+                "shape": self.shape,
+            }
+        
         out_features, in_features = self.shape
         rank = self.rank
         factored_size = rank * (out_features + in_features)
@@ -84,7 +117,7 @@ class Perturbation:
             "full_rank_elements": full_size,
             "factored_size": factored_size,
             "full_size": full_size,
-            "savings_ratio": factored_size / full_size if full_size > 0 else 0,
+            "savings_ratio": full_size / factored_size if factored_size > 0 else 0,
             "rank": rank,
             "shape": self.shape,
         }

@@ -135,11 +135,20 @@ class EggrollStrategy:
             "on_step": [],
             "on_perturb": [],
         }
+        
+        # Population size from last perturb() call (for step())
+        self._last_population_size: Optional[int] = None
+        self._last_perturb_epoch: int = 0
     
     @property
     def epoch(self) -> int:
         """Current epoch number."""
         return self._epoch
+    
+    @property
+    def population_size(self) -> Optional[int]:
+        """Population size from the last perturb() call."""
+        return self._last_population_size
     
     @property
     def total_steps(self) -> int:
@@ -337,6 +346,10 @@ class EggrollStrategy:
                 UserWarning
             )
         
+        # Store population size for step()
+        self._last_population_size = population_size
+        self._last_perturb_epoch = epoch
+        
         ctx = PerturbationContext(
             strategy=self,
             population_size=population_size,
@@ -392,11 +405,6 @@ class EggrollStrategy:
         Returns:
             List of Perturbation objects
         """
-        if param.ndim != 2:
-            raise ValueError(
-                f"Low-rank perturbations only support 2D parameters, got {param.ndim}D"
-            )
-        
         # Find param_id
         param_id = None
         for name, p in self._es_params.items():
@@ -407,37 +415,45 @@ class EggrollStrategy:
         if param_id is None:
             raise ValueError("Parameter not found in strategy's tracked parameters")
         
-        out_features, in_features = param.shape
-        member_ids = torch.arange(population_size, device=param.device)
-        
-        # Generate all factors at once
-        A_all, B_all = generate_lowrank_factors_torch(
-            out_features=out_features,
-            in_features=in_features,
-            rank=self.rank,
-            seed=self._seed,
-            epoch=epoch,
-            member_ids=member_ids,
-            param_id=param_id,
-            sigma=self.sigma,
-            noise_reuse=self.noise_reuse,
-            antithetic=self.antithetic,
-            device=param.device,
-            dtype=param.dtype,
-        )
-        
-        # Convert to list of Perturbation objects
-        perturbations = []
-        for i in range(population_size):
-            perturbations.append(Perturbation(
-                A=A_all[i],
-                B=B_all[i],
-                sigma=self.sigma,
-                member_id=i,
+        if param.ndim == 2:
+            # 2D parameter (weight matrix) - use low-rank factorization
+            out_features, in_features = param.shape
+            member_ids = torch.arange(population_size, device=param.device)
+            
+            # Generate all factors at once
+            A_all, B_all = generate_lowrank_factors_torch(
+                out_features=out_features,
+                in_features=in_features,
+                rank=self.rank,
+                seed=self._seed,
                 epoch=epoch,
-            ))
-        
-        return perturbations
+                member_ids=member_ids,
+                param_id=param_id,
+                sigma=self.sigma,
+                noise_reuse=self.noise_reuse,
+                antithetic=self.antithetic,
+                device=param.device,
+                dtype=param.dtype,
+            )
+            
+            # Convert to list of Perturbation objects
+            perturbations = []
+            for i in range(population_size):
+                perturbations.append(Perturbation(
+                    A=A_all[i],
+                    B=B_all[i],
+                    sigma=self.sigma,
+                    member_id=i,
+                    epoch=epoch,
+                ))
+            
+            return perturbations
+        else:
+            # 1D parameter (bias) - use _sample_perturbation for each member
+            perturbations = []
+            for i in range(population_size):
+                perturbations.append(self._sample_perturbation(param, i, epoch))
+            return perturbations
     
     def _sample_perturbation(
         self,
@@ -457,13 +473,8 @@ class EggrollStrategy:
             epoch: Current epoch
             
         Returns:
-            Perturbation object with low-rank factors
+            Perturbation object (low-rank factors for 2D, direct noise for 1D)
         """
-        if param.ndim != 2:
-            raise ValueError(
-                f"Low-rank perturbations only support 2D parameters, got {param.ndim}D"
-            )
-        
         # Find param_id
         param_id = None
         for name, p in self._es_params.items():
@@ -474,31 +485,60 @@ class EggrollStrategy:
         if param_id is None:
             raise ValueError("Parameter not found in strategy's tracked parameters")
         
-        out_features, in_features = param.shape
-        member_ids = torch.tensor([member_id], device=param.device)
-        
-        A, B = generate_lowrank_factors_torch(
-            out_features=out_features,
-            in_features=in_features,
-            rank=self.rank,
-            seed=self._seed,
-            epoch=epoch,
-            member_ids=member_ids,
-            param_id=param_id,
-            sigma=self.sigma,
-            noise_reuse=self.noise_reuse,
-            antithetic=self.antithetic,
-            device=param.device,
-            dtype=param.dtype,
-        )
-        
-        return Perturbation(
-            A=A[0],  # Remove batch dim
-            B=B[0],
-            sigma=self.sigma,
-            member_id=member_id,
-            epoch=epoch,
-        )
+        if param.ndim == 2:
+            # 2D parameter (weight matrix) - use low-rank factorization
+            out_features, in_features = param.shape
+            member_ids = torch.tensor([member_id], device=param.device)
+            
+            A, B = generate_lowrank_factors_torch(
+                out_features=out_features,
+                in_features=in_features,
+                rank=self.rank,
+                seed=self._seed,
+                epoch=epoch,
+                member_ids=member_ids,
+                param_id=param_id,
+                sigma=self.sigma,
+                noise_reuse=self.noise_reuse,
+                antithetic=self.antithetic,
+                device=param.device,
+                dtype=param.dtype,
+            )
+            
+            return Perturbation(
+                A=A[0],  # Remove batch dim
+                B=B[0],
+                sigma=self.sigma,
+                member_id=member_id,
+                epoch=epoch,
+            )
+        else:
+            # 1D parameter (bias) - use direct noise
+            effective_epoch = epoch % max(1, self.noise_reuse) if self.noise_reuse > 0 else epoch
+            seed_offset = self._seed + param_id * 10000 + effective_epoch
+            gen = torch.Generator(device=param.device).manual_seed(seed_offset + member_id)
+            
+            base_noise = torch.randn(*param.shape, generator=gen, device=param.device, dtype=param.dtype)
+            
+            # Apply antithetic sampling
+            if self.antithetic:
+                if member_id % 2 == 0:
+                    noise = base_noise * self.sigma
+                else:
+                    # Regenerate from partner's seed
+                    gen_partner = torch.Generator(device=param.device).manual_seed(seed_offset + member_id - 1)
+                    partner_noise = torch.randn(*param.shape, generator=gen_partner, device=param.device, dtype=param.dtype)
+                    noise = -partner_noise * self.sigma
+            else:
+                noise = base_noise * self.sigma
+            
+            return Perturbation(
+                A=noise,
+                B=None,  # None signals 1D perturbation
+                sigma=self.sigma,
+                member_id=member_id,
+                epoch=epoch,
+            )
     
     # Alias for tests that use _get_perturbation
     def _get_perturbation(self, param_name: str, member_id: int, epoch: int) -> Perturbation:
@@ -549,7 +589,7 @@ class EggrollStrategy:
     def step(
         self, 
         fitnesses: torch.Tensor, 
-        epoch: int = 0,
+        epoch: Optional[int] = None,
         prenormalized: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -559,7 +599,7 @@ class EggrollStrategy:
         
         Args:
             fitnesses: Fitness values for each population member (population_size,)
-            epoch: Current epoch (for regenerating factors)
+            epoch: Current epoch (for regenerating factors). If None, uses epoch from last perturb()
             prenormalized: If True, skip fitness normalization
             
         Returns:
@@ -568,11 +608,20 @@ class EggrollStrategy:
         if self.model is None:
             raise RuntimeError("Strategy not set up. Call strategy.setup(model) first.")
         
-        # Validate fitness size
-        if fitnesses.shape[0] != self.population_size:
+        # Use stored epoch if not provided
+        if epoch is None:
+            epoch = self._last_perturb_epoch
+        
+        # Validate fitness size matches last population_size from perturb()
+        if self._last_population_size is None:
+            raise RuntimeError(
+                "No population size recorded. Call strategy.perturb() before step()."
+            )
+        
+        if fitnesses.shape[0] != self._last_population_size:
             raise ValueError(
                 f"Fitness size {fitnesses.shape[0]} does not match "
-                f"population_size {self.population_size}"
+                f"population_size {self._last_population_size}"
             )
         
         # Store parameter values before update (for metrics)

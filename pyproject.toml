@@ -36,7 +36,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "jax",
+    "jax[cuda12]",
     "jaxlib",
     "huggingface_hub",
     "tokenizers",

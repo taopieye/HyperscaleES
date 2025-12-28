@@ -10,7 +10,7 @@ It handles:
 """
 import torch
 import torch.nn as nn
-from typing import Dict, Optional, Any, Iterator, ContextManager
+from typing import Dict, Optional, Any, Iterator, ContextManager, Callable, Union
 from dataclasses import dataclass
 from contextlib import contextmanager
 import warnings
@@ -33,6 +33,7 @@ class EggrollConfig:
     optimizer: str = "sgd"
     optimizer_kwargs: Optional[Dict[str, Any]] = None
     seed: int = 42
+    fitness_transform: Union[str, Callable, None] = "normalize"
 
 
 class EggrollStrategy:
@@ -66,6 +67,11 @@ class EggrollStrategy:
         antithetic: Use mirrored sampling for variance reduction
         noise_reuse: Number of epochs to reuse noise (0 = same noise always)
         seed: Random seed for reproducibility
+        fitness_transform: How to normalize fitnesses. Options:
+            - "normalize": z-score normalization (default)
+            - "rank": rank-based transformation
+            - "centered_rank": centered rank transformation
+            - callable: custom function(fitnesses) -> transformed
     """
     
     def __init__(
@@ -78,6 +84,7 @@ class EggrollStrategy:
         antithetic: bool = True,
         noise_reuse: int = 0,
         seed: Optional[int] = None,
+        fitness_transform: Union[str, Callable, None] = "normalize",
     ):
         self.sigma = sigma
         self.lr = lr
@@ -87,6 +94,7 @@ class EggrollStrategy:
         self.antithetic = antithetic
         self.noise_reuse = noise_reuse
         self._seed = seed if seed is not None else 42
+        self.fitness_transform = fitness_transform
         
         # These are set during setup()
         self.model: Optional[nn.Module] = None
@@ -108,6 +116,7 @@ class EggrollStrategy:
             antithetic=config.antithetic,
             noise_reuse=config.noise_reuse,
             seed=config.seed,
+            fitness_transform=getattr(config, 'fitness_transform', 'normalize'),
         )
     
     def setup(self, model: nn.Module) -> None:
@@ -217,6 +226,71 @@ class EggrollStrategy:
             epoch=epoch,
         )
     
+    def sample_perturbations(
+        self,
+        param: nn.Parameter,
+        population_size: int,
+        epoch: int = 0,
+    ) -> list:
+        """
+        Sample perturbations for all population members.
+        
+        This returns a list of Perturbation objects, one per member.
+        Useful for testing and debugging.
+        
+        Args:
+            param: The parameter to perturb
+            population_size: Number of population members
+            epoch: Current epoch
+            
+        Returns:
+            List of Perturbation objects
+        """
+        if param.ndim != 2:
+            raise ValueError(
+                f"Low-rank perturbations only support 2D parameters, got {param.ndim}D"
+            )
+        
+        # Find param_id
+        param_id = None
+        for name, p in self._es_params.items():
+            if p is param:
+                param_id = self._param_ids[name]
+                break
+        
+        if param_id is None:
+            raise ValueError("Parameter not found in strategy's tracked parameters")
+        
+        out_features, in_features = param.shape
+        member_ids = torch.arange(population_size, device=param.device)
+        
+        # Generate all factors at once
+        A_all, B_all = generate_lowrank_factors_torch(
+            out_features=out_features,
+            in_features=in_features,
+            rank=self.rank,
+            seed=self._seed,
+            epoch=epoch,
+            member_ids=member_ids,
+            param_id=param_id,
+            sigma=self.sigma,
+            noise_reuse=self.noise_reuse,
+            antithetic=self.antithetic,
+            device=param.device,
+            dtype=param.dtype,
+        )
+        
+        # Convert to list of Perturbation objects
+        perturbations = []
+        for i in range(population_size):
+            perturbations.append(Perturbation(
+                A=A_all[i],
+                B=B_all[i],
+                sigma=self.sigma,
+            ))
+        
+        return perturbations
+    
     def _sample_perturbation(
         self,
         param: nn.Parameter,
@@ -265,6 +339,7 @@ class EggrollStrategy:
             param_id=param_id,
             sigma=self.sigma,
             noise_reuse=self.noise_reuse,
+            antithetic=self.antithetic,
             device=param.device,
             dtype=param.dtype,
         )
@@ -275,7 +350,45 @@ class EggrollStrategy:
             sigma=self.sigma,
         )
     
-    def step(self, fitnesses: torch.Tensor) -> Dict[str, Any]:
+    def normalize_fitnesses(self, fitnesses: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize fitnesses for ES update (public API).
+        
+        Uses z-score normalization: (fitness - mean) / std
+        
+        Args:
+            fitnesses: Raw fitness values
+            
+        Returns:
+            Normalized fitness values with zero mean and unit variance
+        """
+        return self._normalize_fitnesses(fitnesses)
+    
+    # Antithetic sampling helpers
+    @staticmethod
+    def get_antithetic_partner(member_id: int) -> int:
+        """
+        Get the antithetic partner for a member.
+        
+        For member 2k, partner is 2k+1.
+        For member 2k+1, partner is 2k.
+        """
+        if member_id % 2 == 0:
+            return member_id + 1
+        else:
+            return member_id - 1
+    
+    @staticmethod
+    def is_positive_perturbation(member_id: int) -> bool:
+        """
+        Check if this member uses positive sigma.
+        
+        Even members (0, 2, 4, ...) use +sigma.
+        Odd members (1, 3, 5, ...) use -sigma.
+        """
+        return member_id % 2 == 0
+    
+    def step(self, fitnesses: torch.Tensor, epoch: int = 0) -> Dict[str, Any]:
         """
         Update parameters based on fitnesses.
         
@@ -283,6 +396,7 @@ class EggrollStrategy:
         
         Args:
             fitnesses: Fitness values for each population member (population_size,)
+            epoch: Current epoch (for regenerating factors)
             
         Returns:
             Dictionary with training metrics
@@ -319,11 +433,12 @@ class EggrollStrategy:
                 in_features=in_features,
                 rank=self.rank,
                 seed=self._seed,
-                epoch=0,  # TODO: track current epoch
+                epoch=epoch,
                 member_ids=member_ids,
                 param_id=param_id,
                 sigma=self.sigma,
                 noise_reuse=self.noise_reuse,
+                antithetic=self.antithetic,
                 device=device,
                 dtype=param.dtype,
             )
@@ -351,13 +466,70 @@ class EggrollStrategy:
     
     def _normalize_fitnesses(self, fitnesses: torch.Tensor) -> torch.Tensor:
         """
-        Normalize fitnesses for ES update.
+        Normalize fitnesses for ES update based on fitness_transform setting.
         
-        Uses z-score normalization: (fitness - mean) / std
+        Supports:
+        - "normalize": z-score normalization (default)
+        - "rank": rank-based transformation  
+        - "centered_rank": centered rank transformation
+        - callable: custom function
         """
+        transform = self.fitness_transform
+        
+        # Handle callable transforms
+        if callable(transform):
+            return transform(fitnesses)
+        
+        # Handle string transforms
+        if transform == "normalize" or transform is None:
+            return self._zscore_normalize(fitnesses)
+        elif transform == "rank":
+            return self._rank_transform(fitnesses)
+        elif transform == "centered_rank":
+            return self._centered_rank_transform(fitnesses)
+        else:
+            raise ValueError(f"Unknown fitness_transform: {transform}")
+    
+    def _zscore_normalize(self, fitnesses: torch.Tensor) -> torch.Tensor:
+        """Z-score normalization: (fitness - mean) / std"""
         mean = fitnesses.mean()
-        std = fitnesses.std() + 1e-8
+        std = fitnesses.std()
+        # Handle zero variance case
+        if std < 1e-8:
+            return torch.zeros_like(fitnesses)
         return (fitnesses - mean) / std
+    
+    def _rank_transform(self, fitnesses: torch.Tensor) -> torch.Tensor:
+        """
+        Rank-based fitness transformation.
+        
+        Maps fitnesses to their ranks (0 to n-1), then normalizes.
+        More robust to outliers than z-score.
+        """
+        n = fitnesses.shape[0]
+        # Get ranks (0 to n-1)
+        ranks = fitnesses.argsort().argsort().float()
+        # Normalize to have zero mean and bounded magnitude
+        centered = ranks - ranks.mean()
+        if n > 1:
+            centered = centered / (n - 1)  # Scale to roughly [-0.5, 0.5]
+        return centered
+    
+    def _centered_rank_transform(self, fitnesses: torch.Tensor) -> torch.Tensor:
+        """
+        Centered rank transformation.
+        
+        Maps fitnesses to centered ranks in [-0.5, 0.5].
+        """
+        n = fitnesses.shape[0]
+        # Get ranks (0 to n-1)
+        ranks = fitnesses.argsort().argsort().float()
+        # Center around 0: map [0, n-1] to [-(n-1)/2, (n-1)/2]
+        centered = ranks - (n - 1) / 2.0
+        # Scale to [-0.5, 0.5]
+        if n > 1:
+            centered = centered / (n - 1)
+        return centered
     
     def state_dict(self) -> Dict[str, Any]:
         """

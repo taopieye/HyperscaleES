@@ -161,6 +161,7 @@ class PerturbationContext:
                 param_id=param_id,
                 sigma=self._strategy.sigma,
                 noise_reuse=self._strategy.noise_reuse,
+                antithetic=self._strategy.antithetic,
                 device=device,
                 dtype=param.dtype,
             )

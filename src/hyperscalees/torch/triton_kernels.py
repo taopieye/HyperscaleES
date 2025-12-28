@@ -15,6 +15,7 @@ import triton
 import triton.language as tl
 from typing import Tuple
 import math
+import numpy as np
 
 
 # =============================================================================
@@ -453,6 +454,7 @@ def generate_lowrank_factors_torch(
     param_id: int,
     sigma: float,
     noise_reuse: int = 0,
+    antithetic: bool = True,
     device: torch.device = None,
     dtype: torch.dtype = torch.float32,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -462,14 +464,20 @@ def generate_lowrank_factors_torch(
     Uses a vectorized approach: generate a unique seed for each (epoch, member, param)
     combination and use it to seed independent generators.
     
+    For antithetic sampling:
+    - member_ids 2k and 2k+1 share the same base noise
+    - member 2k gets +sigma, member 2k+1 gets -sigma
+    - This is implemented by using member_id // 2 as the "true" index
+    
     Returns:
-        A: (population_size, out_features, rank) tensor
-        B: (population_size, in_features, rank) tensor
+        A: (population_size, out_features, rank) tensor - scaled by ±sigma
+        B: (population_size, in_features, rank) tensor - unscaled
     """
     if isinstance(member_ids, int):
         member_ids = torch.tensor([member_ids], device=device)
     
     population_size = member_ids.shape[0]
+    member_ids_np = member_ids.cpu().numpy()
     
     # Handle noise reuse: epoch 0-4 all use epoch 0 if noise_reuse=5
     if noise_reuse > 0:
@@ -477,13 +485,23 @@ def generate_lowrank_factors_torch(
     else:
         effective_epoch = 0  # Same noise for all epochs
     
+    # For antithetic sampling, pairs (2k, 2k+1) share the same base noise
+    # The "true" member index is member_id // 2
+    if antithetic:
+        true_member_ids = member_ids_np // 2
+        # Sigma sign: even members get +sigma, odd members get -sigma
+        sigma_signs = np.where(member_ids_np % 2 == 0, 1.0, -1.0)
+    else:
+        true_member_ids = member_ids_np
+        sigma_signs = np.ones(population_size)
+    
     # Create deterministic seeds for each member
     # Use a simple hash combining seed, epoch, member_id, param_id
     # This ensures reproducibility: same inputs -> same outputs
     base_seeds = (
         seed 
         + effective_epoch * 1000000 
-        + member_ids.cpu().numpy() * 1000 
+        + true_member_ids * 1000 
         + param_id
     )
     
@@ -493,13 +511,14 @@ def generate_lowrank_factors_torch(
     
     # Generate noise for all members (still uses a loop but over members only, not params)
     # In production, this would use Triton for true parallelism
-    for i, s in enumerate(base_seeds):
+    for i, (s, sign) in enumerate(zip(base_seeds, sigma_signs)):
         gen = torch.Generator(device='cpu').manual_seed(int(s))
         
         # Generate A and B from the same random stream for consistency
         combined = torch.randn(out_features + in_features, rank, generator=gen, dtype=dtype)
         B[i] = combined[:in_features].to(device)
-        A[i] = combined[in_features:].to(device) * sigma
+        # A is scaled by sigma with appropriate sign for antithetic
+        A[i] = combined[in_features:].to(device) * sigma * sign
         
     return A, B
 

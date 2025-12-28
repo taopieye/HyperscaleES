@@ -71,8 +71,8 @@ class Perturbation:
         
         Returns:
             Dictionary with:
-            - factored_size: Elements stored in factored form
-            - full_size: Elements that would be stored in full form
+            - low_rank_elements: Elements stored in factored form
+            - full_rank_elements: Elements that would be stored in full form
             - savings_ratio: Ratio of factored to full storage
         """
         out_features, in_features = self.shape
@@ -80,6 +80,8 @@ class Perturbation:
         factored_size = rank * (out_features + in_features)
         full_size = out_features * in_features
         return {
+            "low_rank_elements": factored_size,
+            "full_rank_elements": full_size,
             "factored_size": factored_size,
             "full_size": full_size,
             "savings_ratio": factored_size / full_size if full_size > 0 else 0,
@@ -319,12 +321,51 @@ class PerturbationContext:
         if isinstance(model, nn.Linear):
             return self._perturbed_linear(model, x, member_ids, "weight")
         
-        # For more complex models, we need to hook into each Linear layer
-        # This is a simplified version - full implementation would use hooks
-        raise NotImplementedError(
-            f"batched_forward not yet implemented for model type {type(model)}. "
-            "Currently supports nn.Sequential and nn.Linear."
-        )
+        # For custom nn.Module subclasses, use hooks to intercept Linear layers
+        return self._apply_perturbed_forward_with_hooks(model, x, member_ids)
+    
+    def _apply_perturbed_forward_with_hooks(
+        self,
+        model: nn.Module,
+        x: torch.Tensor,
+        member_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Apply perturbed forward using hooks for custom modules.
+        
+        This temporarily installs forward hooks on all Linear layers to apply
+        perturbations, then runs the forward pass.
+        """
+        hooks = []
+        
+        # Build a mapping from module to param name
+        module_to_param_name = {}
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Linear):
+                param_name = f"{name}.weight" if name else "weight"
+                module_to_param_name[module] = param_name
+        
+        def make_hook(param_name):
+            def hook(module, args, output):
+                # Get the input to this linear layer
+                inp = args[0]
+                # Apply perturbed linear instead
+                return self._perturbed_linear(module, inp, member_ids, param_name)
+            return hook
+        
+        try:
+            # Install hooks
+            for module, param_name in module_to_param_name.items():
+                if param_name in self._cached_factors:
+                    h = module.register_forward_hook(make_hook(param_name))
+                    hooks.append(h)
+            
+            # Run forward pass
+            return model(x)
+        finally:
+            # Remove hooks
+            for h in hooks:
+                h.remove()
     
     def _perturbed_linear(
         self,

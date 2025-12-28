@@ -103,6 +103,16 @@ class EggrollStrategy:
         self.antithetic = antithetic
         self.noise_reuse = noise_reuse
         self._seed = seed if seed is not None else 42
+        
+        # Validate fitness_transform
+        valid_transforms = {"normalize", "rank", "centered_rank", None}
+        if fitness_transform is not None and not callable(fitness_transform):
+            if fitness_transform not in valid_transforms:
+                raise ValueError(
+                    f"Invalid fitness_transform: {fitness_transform!r}. "
+                    f"Must be one of {valid_transforms} or a callable."
+                )
+        
         self.fitness_transform = fitness_transform
         self.baseline = baseline
         self.fitness_eps = fitness_eps
@@ -312,10 +322,19 @@ class EggrollStrategy:
                 "Exit the current context before starting a new one."
             )
         
-        # Validate population size for antithetic sampling
-        if self.antithetic and population_size % 2 != 0:
+        # Validate population size
+        if population_size <= 0:
             raise ValueError(
-                f"With antithetic=True, population_size must be even. Got {population_size}"
+                f"population_size must be positive, got {population_size}"
+            )
+        
+        # Handle antithetic sampling with odd population
+        if self.antithetic and population_size % 2 != 0:
+            import warnings
+            warnings.warn(
+                f"With antithetic=True, population_size should be even for proper pairing. "
+                f"Got {population_size}. The last member will not have a partner.",
+                UserWarning
             )
         
         ctx = PerturbationContext(
@@ -324,9 +343,9 @@ class EggrollStrategy:
             epoch=epoch,
         )
         
-        # Call on_perturb callbacks
+        # Call on_perturb callbacks (pass kwargs only, not self)
         for callback in self._callbacks["on_perturb"]:
-            callback(self, population_size=population_size, epoch=epoch)
+            callback(population_size=population_size, epoch=epoch)
         
         return ctx
     
@@ -549,6 +568,13 @@ class EggrollStrategy:
         if self.model is None:
             raise RuntimeError("Strategy not set up. Call strategy.setup(model) first.")
         
+        # Validate fitness size
+        if fitnesses.shape[0] != self.population_size:
+            raise ValueError(
+                f"Fitness size {fitnesses.shape[0]} does not match "
+                f"population_size {self.population_size}"
+            )
+        
         # Store parameter values before update (for metrics)
         params_before = {name: p.data.clone() for name, p in self._es_params.items()}
         
@@ -565,58 +591,83 @@ class EggrollStrategy:
         device = fitnesses.device
         population_size = fitnesses.shape[0]
         
-        total_grad_norm_sq = 0.0
-        
         for name, param in self._es_params.items():
-            if param.ndim != 2:
-                # For biases, use simple ES update
-                # We'd need full perturbations for this
-                # For now, skip (or implement later)
-                continue
-            
             param_id = self._param_ids[name]
-            out_features, in_features = param.shape
             
-            # Regenerate factors (same seed = same factors)
-            member_ids = torch.arange(population_size, device=device)
-            A, B = generate_lowrank_factors_torch(
-                out_features=out_features,
-                in_features=in_features,
-                rank=self.rank,
-                seed=self._seed,
-                epoch=epoch,
-                member_ids=member_ids,
-                param_id=param_id,
-                sigma=self.sigma,
-                noise_reuse=self.noise_reuse,
-                antithetic=self.antithetic,
-                device=device,
-                dtype=param.dtype,
-            )
-            
-            # Compute ES gradient
-            grad = compute_es_gradient_torch(normalized_fitnesses, A, B, self.sigma)
-            
-            # Scale by sqrt(population_size) as in original EGGROLL
-            grad = -grad * (population_size ** 0.5)
+            if param.ndim == 2:
+                # For weight matrices, use low-rank perturbations
+                out_features, in_features = param.shape
+                
+                # Regenerate factors (same seed = same factors)
+                member_ids = torch.arange(population_size, device=device)
+                A, B = generate_lowrank_factors_torch(
+                    out_features=out_features,
+                    in_features=in_features,
+                    rank=self.rank,
+                    seed=self._seed,
+                    epoch=epoch,
+                    member_ids=member_ids,
+                    param_id=param_id,
+                    sigma=self.sigma,
+                    noise_reuse=self.noise_reuse,
+                    antithetic=self.antithetic,
+                    device=device,
+                    dtype=param.dtype,
+                )
+                
+                # Compute ES gradient
+                grad = compute_es_gradient_torch(normalized_fitnesses, A, B, self.sigma)
+                
+                # Scale by sqrt(population_size) as in original EGGROLL
+                grad = -grad * (population_size ** 0.5)
+            else:
+                # For 1D parameters (biases), use full-rank perturbations
+                # Generate deterministic noise for each population member
+                noise = torch.zeros(population_size, *param.shape, device=device, dtype=param.dtype)
+                for i in range(population_size):
+                    # Use same seeding scheme as low-rank factors
+                    effective_epoch = epoch % max(1, self.noise_reuse) if self.noise_reuse > 0 else epoch
+                    seed_offset = self._seed + param_id * 10000 + effective_epoch
+                    gen = torch.Generator(device=device).manual_seed(seed_offset + i)
+                    
+                    base_noise = torch.randn(*param.shape, generator=gen, device=device, dtype=param.dtype)
+                    
+                    # Apply antithetic sampling
+                    if self.antithetic:
+                        if i % 2 == 0:
+                            noise[i] = base_noise * self.sigma
+                        else:
+                            # Regenerate from partner's seed
+                            gen_partner = torch.Generator(device=device).manual_seed(seed_offset + i - 1)
+                            partner_noise = torch.randn(*param.shape, generator=gen_partner, device=device, dtype=param.dtype)
+                            noise[i] = -partner_noise * self.sigma
+                    else:
+                        noise[i] = base_noise * self.sigma
+                
+                # Compute ES gradient: sum_i (fitness_i * noise_i) / (sigma^2 * pop_size)
+                grad = torch.einsum('i,i...->...', normalized_fitnesses, noise) / (self.sigma * population_size)
+                
+                # Scale by sqrt(population_size) as in original EGGROLL
+                grad = -grad * (population_size ** 0.5)
             
             # Assign gradient to parameter
             param.grad = grad.to(param.dtype)
-            
-            # Track gradient norm
-            total_grad_norm_sq += (grad ** 2).sum().item()
         
         # Apply gradient clipping if specified
         if self.max_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self._es_params.values(), self.max_grad_norm)
         
+        # Compute gradient norm AFTER clipping for accurate metrics
+        total_grad_norm_sq = 0.0
+        for param in self._es_params.values():
+            if param.grad is not None:
+                total_grad_norm_sq += (param.grad ** 2).sum().item()
+        total_grad_norm = math.sqrt(total_grad_norm_sq)
+        
         # Apply optimizer step
         self._optimizer.step()
         self._step_count += 1
         self._epoch = epoch + 1  # Increment epoch
-        
-        # Compute metrics
-        total_grad_norm = math.sqrt(total_grad_norm_sq)
         
         # Compute parameter delta norm
         param_delta_norm_sq = 0.0
@@ -635,9 +686,9 @@ class EggrollStrategy:
             "param_delta_norm": param_delta_norm,
         }
         
-        # Call on_step callbacks
+        # Call on_step callbacks (pass kwargs only, not self)
         for callback in self._callbacks["on_step"]:
-            callback(self, metrics=metrics, epoch=epoch)
+            callback(metrics=metrics, epoch=epoch)
         
         return metrics
     
@@ -676,8 +727,8 @@ class EggrollStrategy:
             return torch.zeros_like(fitnesses)
         
         mean = fitnesses.mean()
-        # Use unbiased variance (ddof=1) for proper unit variance
-        std = fitnesses.std(unbiased=True)
+        # Use biased std (population std) - matches expected test behavior
+        std = fitnesses.std(unbiased=False)
         
         # Handle zero variance case
         if std < self.fitness_eps:
@@ -796,4 +847,18 @@ class OpenESStrategy(EggrollStrategy):
             seed=seed,
             fitness_transform=fitness_transform,
             **kwargs,
+        )
+    
+    @classmethod
+    def from_config(cls, config) -> "OpenESStrategy":
+        """Create OpenES strategy from config dataclass."""
+        return cls(
+            sigma=config.sigma,
+            lr=config.lr,
+            optimizer=getattr(config, 'optimizer', 'sgd'),
+            optimizer_kwargs=getattr(config, 'optimizer_kwargs', None),
+            antithetic=getattr(config, 'antithetic', True),
+            noise_reuse=getattr(config, 'noise_reuse', 0),
+            seed=getattr(config, 'seed', 42),
+            fitness_transform=getattr(config, 'fitness_transform', 'normalize'),
         )

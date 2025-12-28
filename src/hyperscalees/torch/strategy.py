@@ -462,6 +462,20 @@ class EggrollStrategy(BaseStrategy):
         )
         self._rank = rank
     
+    @classmethod
+    def from_config(cls, config: 'EggrollConfig') -> 'EggrollStrategy':
+        """Create strategy from config dataclass."""
+        return cls(
+            sigma=config.sigma,
+            lr=config.lr,
+            rank=config.rank,
+            antithetic=config.antithetic,
+            noise_reuse=config.noise_reuse,
+            optimizer=config.optimizer,
+            optimizer_kwargs=config.optimizer_kwargs,
+            seed=config.seed,
+        )
+    
     @property
     def rank(self) -> int:
         """Perturbation rank."""

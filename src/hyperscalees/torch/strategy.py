@@ -14,8 +14,67 @@ import warnings
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Iterator, List, Tuple, Union, ContextManager, Set, Callable
 from dataclasses import dataclass, field
+from torch.func import vmap
 
 from .perturbation import Perturbation, PerturbationContext
+
+
+# ==============================================================================
+# Pure-tensor RNG functions (vmap-compatible, like JAX's fold_in + random.normal)
+# ==============================================================================
+
+def _fold_in(key: torch.Tensor, data: torch.Tensor) -> torch.Tensor:
+    """
+    JAX-style fold_in: deterministically derive a new key from key + data.
+    
+    Pure tensor operations - works inside vmap.
+    """
+    # Use 32-bit operations to avoid overflow issues
+    mixed = (key.to(torch.int64) + data.to(torch.int64) * 2654435761) & 0xFFFFFFFF
+    mixed = (mixed ^ (mixed >> 15)) & 0xFFFFFFFF
+    mixed = (mixed * 2246822519) & 0xFFFFFFFF
+    mixed = (mixed ^ (mixed >> 13)) & 0xFFFFFFFF
+    mixed = (mixed * 3266489917) & 0xFFFFFFFF
+    mixed = (mixed ^ (mixed >> 16)) & 0xFFFFFFFF
+    return mixed
+
+
+def _random_normal(key: torch.Tensor, shape: tuple, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    """
+    Generate normal random numbers from a key.
+    
+    Pure tensor operations - works inside vmap.
+    Uses counter-based RNG with Box-Muller transform.
+    """
+    numel = 1
+    for s in shape:
+        numel *= s
+    # Round up to even for Box-Muller
+    numel_even = numel + (numel % 2)
+    
+    # Counter-based: key + counter for each element
+    counters = torch.arange(numel_even, device=device, dtype=torch.int64)
+    seeds = (key.to(torch.int64) + counters) & 0xFFFFFFFF
+    
+    # Mixing (simplified splitmix32)
+    seeds = ((seeds ^ (seeds >> 17)) * 0xed5ad4bb) & 0xFFFFFFFF
+    seeds = ((seeds ^ (seeds >> 11)) * 0xac4c1b51) & 0xFFFFFFFF
+    seeds = ((seeds ^ (seeds >> 15)) * 0x31848bab) & 0xFFFFFFFF
+    seeds = (seeds ^ (seeds >> 14)) & 0xFFFFFFFF
+    
+    # To uniform [0,1)
+    uniform = seeds.float() / (2**32)
+    
+    # Box-Muller for normal distribution
+    uniform = uniform.view(-1, 2)
+    u1 = uniform[:, 0].clamp(min=1e-10, max=1.0 - 1e-10)
+    u2 = uniform[:, 1]
+    r = torch.sqrt(-2.0 * torch.log(u1))
+    theta = 2.0 * math.pi * u2
+    z0 = r * torch.cos(theta)
+    z1 = r * torch.sin(theta)
+    normal = torch.stack([z0, z1], dim=-1).flatten()[:numel]
+    return normal.view(shape).to(dtype)
 
 
 @dataclass
@@ -669,7 +728,8 @@ class EggrollStrategy(BaseStrategy):
         """
         Sample a low-rank perturbation for a parameter.
         
-        Uses the same hash-based RNG as _batched_forward_impl to ensure consistency.
+        Uses the same RNG as _batched_forward_impl (fold_in + _random_normal) 
+        to ensure consistency between forward pass and gradient computation.
         
         For antithetic sampling:
         - Even member_id (0, 2, 4, ...): +ε
@@ -698,44 +758,26 @@ class EggrollStrategy(BaseStrategy):
             effective_member = member_id
             sign = 1.0
         
-        # Use same hash-based RNG as _batched_forward_impl
+        # Use same RNG as _batched_forward_impl: fold_in based
         param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
         
-        # Compute seed using same formula as _batched_forward_impl
-        base_seed_component = self._seed * 0x9E3779B97F4A7C15 + effective_epoch * 0x85EBCA6B
-        member_seed_component = effective_member * 0xBF58476D1CE4E5B9
-        layer_seed = (base_seed_component + member_seed_component + param_key * 0x94D049BB133111EB) % (2**62)
+        # Base key (same formula as _batched_forward_impl)
+        base_key = torch.tensor(
+            (self._seed * 2654435761 + effective_epoch * 2246822519) & 0xFFFFFFFF,
+            dtype=torch.int64, device=param.device
+        )
         
-        # Generate random numbers using same hash approach
-        numel = (m + n) * r
-        counters = torch.arange(numel, device=param.device, dtype=torch.int64)
+        # Fold in member ID
+        member_key = _fold_in(base_key, torch.tensor(effective_member, dtype=torch.int64, device=param.device))
         
-        # SplitMix64-style mixing
-        mixed = layer_seed + counters
-        mixed = (mixed ^ (mixed >> 30)) * 0xBF58476D1CE4E5B9
-        mixed = (mixed ^ (mixed >> 27)) * 0x94D049BB133111EB
-        mixed = mixed ^ (mixed >> 31)
+        # Fold in layer key
+        layer_key = _fold_in(member_key, torch.tensor(param_key, dtype=torch.int64, device=param.device))
         
-        # Convert to uniform then normal via Box-Muller
-        uniform = ((mixed & 0x7FFFFFFFFFFFFFFF).float() / (2**63)).to(param.dtype)
+        # Generate factors using same _random_normal
+        factors = _random_normal(layer_key, (m + n, r), param.dtype, param.device)
         
-        # Box-Muller transform
-        if numel % 2 == 1:
-            uniform = torch.cat([uniform, uniform[:1]])
-        uniform = uniform.view(-1, 2)
-        u1 = uniform[:, 0].clamp(min=1e-10)
-        u2 = uniform[:, 1]
-        
-        radius = torch.sqrt(-2 * torch.log(u1))
-        theta = 2 * math.pi * u2
-        z0 = radius * torch.cos(theta)
-        z1 = radius * torch.sin(theta)
-        
-        normal = torch.stack([z0, z1], dim=-1).flatten()[:numel]
-        combined = normal.view(m + n, r)
-        
-        A = combined[:m]  # (m, r)
-        B = combined[m:]  # (n, r)
+        A = factors[:m]  # (m, r)
+        B = factors[m:]  # (n, r)
         
         # Apply sigma scaling and antithetic sign
         sigma_scaled = self._sigma / math.sqrt(r)
@@ -770,7 +812,7 @@ class EggrollStrategy(BaseStrategy):
         """
         Generate all low-rank perturbation factors for all population members.
         
-        Uses the same hash-based RNG as _batched_forward_impl for consistency.
+        Uses the same RNG as _batched_forward_impl (fold_in + _random_normal).
         
         Returns:
             all_A: (population_size, m_out, r) - already scaled by sigma and antithetic sign
@@ -792,9 +834,6 @@ class EggrollStrategy(BaseStrategy):
         # Get param key
         param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
         
-        # Compute base seed components (same as _batched_forward_impl)
-        base_seed_component = self._seed * 0x9E3779B97F4A7C15 + effective_epoch * 0x85EBCA6B
-        
         # For antithetic, pairs share base noise
         if self._antithetic:
             effective_member_ids = torch.arange(population_size, device=param.device) // 2
@@ -804,43 +843,23 @@ class EggrollStrategy(BaseStrategy):
             effective_member_ids = torch.arange(population_size, device=param.device)
             signs = torch.ones(population_size, 1, 1, device=param.device, dtype=param.dtype)
         
-        # Compute per-member seeds
-        member_seed_component = effective_member_ids.to(torch.int64) * 0xBF58476D1CE4E5B9
-        layer_seeds = (base_seed_component + member_seed_component + param_key * 0x94D049BB133111EB) % (2**62)
+        # Base key (same as _batched_forward_impl)
+        base_key = torch.tensor(
+            (self._seed * 2654435761 + effective_epoch * 2246822519) & 0xFFFFFFFF,
+            dtype=torch.int64, device=param.device
+        )
         
-        # Generate random numbers using hash-based RNG
-        numel_per_member = (m_out + n_in) * r
-        counters = torch.arange(numel_per_member, device=param.device, dtype=torch.int64)
+        # Generate perturbations for each member using vmap
+        param_key_tensor = torch.tensor(param_key, dtype=torch.int64, device=param.device)
         
-        # Expand for broadcasting: seeds (pop, 1), counters (1, numel)
-        seeds_expanded = layer_seeds.unsqueeze(-1)
-        counters_expanded = counters.unsqueeze(0)
+        def generate_single(effective_member_id):
+            member_key = _fold_in(base_key, effective_member_id)
+            layer_key = _fold_in(member_key, param_key_tensor)
+            factors = _random_normal(layer_key, (m_out + n_in, r), param.dtype, param.device)
+            return factors
         
-        # SplitMix64-style mixing
-        mixed = seeds_expanded + counters_expanded
-        mixed = (mixed ^ (mixed >> 30)) * 0xBF58476D1CE4E5B9
-        mixed = (mixed ^ (mixed >> 27)) * 0x94D049BB133111EB
-        mixed = mixed ^ (mixed >> 31)
-        
-        # Convert to uniform then normal via Box-Muller
-        uniform = ((mixed & 0x7FFFFFFFFFFFFFFF).float() / (2**63)).to(param.dtype)
-        
-        # Box-Muller transform
-        batch_size = population_size
-        uniform = uniform.view(batch_size, -1, 2)
-        u1 = uniform[..., 0].clamp(min=1e-10)
-        u2 = uniform[..., 1]
-        
-        radius = torch.sqrt(-2 * torch.log(u1))
-        theta = 2 * math.pi * u2
-        z0 = radius * torch.cos(theta)
-        z1 = radius * torch.sin(theta)
-        
-        normal = torch.stack([z0, z1], dim=-1).view(batch_size, -1)
-        normal = normal[:, :numel_per_member]
-        
-        # Reshape to (pop, m_out + n_in, r)
-        all_factors = normal.view(batch_size, m_out + n_in, r)
+        # vmap over effective member IDs
+        all_factors = vmap(generate_single)(effective_member_ids)  # (pop, m_out + n_in, r)
         
         # Split into A and B
         all_A = all_factors[:, :m_out, :]
@@ -863,154 +882,146 @@ class EggrollStrategy(BaseStrategy):
         """
         Efficient batched forward pass with low-rank perturbations.
         
-        Following JAX EGGROLL pattern: generates perturbations on-the-fly
-        using deterministic hash-based random numbers, avoiding memory
-        allocation for storing all perturbations.
+        Following JAX EGGROLL pattern:
+        1. Use vmap to vectorize over population members
+        2. Generate perturbations on-the-fly inside the vmapped function
+        3. Use fold_in for deterministic per-member RNG keys
         
         For each linear layer computes: output = x @ W.T + bias + x @ B @ A.T
         """
-        current_input = x
-        
         # Compute effective epoch for noise reuse
         if self._noise_reuse == 0:
             effective_epoch = 0
         else:
             effective_epoch = epoch // self._noise_reuse
         
-        # Compute effective member IDs (for antithetic, pairs share base noise)
+        # Compute effective member IDs and signs (for antithetic sampling)
         if self._antithetic:
             effective_member_ids = member_ids // 2
-            # Signs: even members +1, odd members -1
-            signs = 1 - 2 * (member_ids % 2).float()
+            signs = 1.0 - 2.0 * (member_ids % 2).to(x.dtype)
         else:
             effective_member_ids = member_ids
-            signs = torch.ones_like(member_ids, dtype=x.dtype)
+            signs = torch.ones(member_ids.shape[0], device=x.device, dtype=x.dtype)
         
-        # Build param_name -> param mapping once
-        param_names = {id(p): n for n, p in model.named_parameters()}
+        # Build ordered list of operations to perform
+        # Each entry: (op_type, op_data)
+        # op_type: 'linear_evolve', 'linear_noevolve', 'activation', 'other'
+        operations = []
+        param_names_map = {id(p): n for n, p in model.named_parameters()}
         
-        # Compute combined seeds for each member (vectorized)
-        # Keep all computation in tensor space to avoid overflow
-        # Use smaller mixing constants that fit in int64
-        SEED_MIX = 2654435761  # 0x9E3779B1 (32-bit golden ratio hash)
-        EPOCH_MIX = 2246822519  # 0x85EBCA77 (mix constant)
-        MEMBER_MIX = 3266489917  # 0xC2B2AE3D (mix constant)
-        
-        base_seed = (self._seed % (2**31)) * SEED_MIX + (effective_epoch % (2**31)) * EPOCH_MIX
-        base_seed = base_seed % (2**62)  # Keep in int64 range
-        base_seed_tensor = torch.tensor(base_seed, dtype=torch.int64, device=x.device)
-        member_seed_component = (effective_member_ids.to(torch.int64) * MEMBER_MIX) % (2**62)
-        
-        # Process each layer
-        layer_idx = 0
         for name, module in model.named_modules():
             if isinstance(module, nn.Linear):
                 W = module.weight
                 bias = module.bias
-                param_name = param_names.get(id(W), f"{name}.weight" if name else "weight")
-                
-                if not self._should_evolve_param(param_name, W):
-                    # No perturbation - standard forward
-                    current_input = current_input @ W.T
-                    if bias is not None:
-                        current_input = current_input + bias
-                    continue
-                
-                m_out, n_in = W.shape
-                r = min(self._rank, m_out, n_in)
-                sigma_scaled = self._sigma / math.sqrt(r)
-                
-                # Get parameter-specific key
+                param_name = param_names_map.get(id(W), f"{name}.weight" if name else "weight")
+                evolve = self._should_evolve_param(param_name, W)
                 param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
-                LAYER_MIX = 2496928179  # 0x94D049B3
                 
-                # Compute per-member seeds for this layer
-                # All operations in tensor space
-                layer_seeds = (base_seed_tensor + member_seed_component + param_key * LAYER_MIX) % (2**62)
-                
-                # Generate random factors on-the-fly using hash-based RNG
-                # Shape: (batch_size, m_out + n_in, r)
-                batch_size = current_input.shape[0]
-                
-                # Vectorized random generation
-                numel_per_member = (m_out + n_in) * r
-                counters = torch.arange(numel_per_member, device=x.device, dtype=torch.int64)
-                
-                # Expand seeds and counters for broadcasting
-                # seeds: (batch_size, 1), counters: (1, numel)
-                seeds_expanded = layer_seeds.unsqueeze(-1)  # (batch_size, 1)
-                counters_expanded = counters.unsqueeze(0)   # (1, numel)
-                
-                # Mix seeds with counters (hash-based RNG)
-                # Using smaller constants that fit in int64 when combined with tensor ops
-                MIX_A = 0xBF58476D  # 32-bit constant
-                MIX_B = 0x94D049B3  # 32-bit constant
-                
-                mixed = seeds_expanded + counters_expanded
-                # Keep values in reasonable range
-                mixed = mixed % (2**62)
-                mixed = ((mixed >> 30) ^ mixed) % (2**62)
-                mixed = (mixed * MIX_A) % (2**62)
-                mixed = ((mixed >> 27) ^ mixed) % (2**62)
-                mixed = (mixed * MIX_B) % (2**62)
-                mixed = (mixed >> 31) ^ mixed
-                
-                # Convert to uniform [0, 1)
-                # Using 2**62 since we've kept values in that range
-                uniform = (mixed.abs().float() / (2.0**62)).to(x.dtype)
-                
-                # Box-Muller transform for normal distribution
-                # Reshape to pairs: (batch_size, numel/2, 2)
-                uniform = uniform.view(batch_size, -1, 2)
-                u1 = uniform[..., 0].clamp(min=1e-10)
-                u2 = uniform[..., 1]
-                
-                radius = torch.sqrt(-2 * torch.log(u1))
-                theta = 2 * math.pi * u2
-                z0 = radius * torch.cos(theta)
-                z1 = radius * torch.sin(theta)
-                
-                # Interleave back to full size
-                normal = torch.stack([z0, z1], dim=-1).view(batch_size, -1)
-                normal = normal[:, :numel_per_member]  # Trim to exact size
-                
-                # Reshape to (batch_size, m_out + n_in, r)
-                all_factors = normal.view(batch_size, m_out + n_in, r)
-                
-                # Split into A and B
-                A_batch = all_factors[:, :m_out, :]  # (batch_size, m_out, r)
-                B_batch = all_factors[:, m_out:, :]  # (batch_size, n_in, r)
-                
-                # Apply sigma scaling and antithetic sign to A
-                A_batch = A_batch * (sigma_scaled * signs.view(-1, 1, 1))
-                
-                # Compute perturbed forward: x @ W.T + bias + x @ B @ A.T
-                # Base forward
-                base_out = current_input @ W.T
-                if bias is not None:
-                    base_out = base_out + bias
-                
-                # Perturbation using batched matrix multiply
-                # x: (batch, n_in), B: (batch, n_in, r) -> xB: (batch, r)
-                xB = torch.bmm(current_input.unsqueeze(1), B_batch).squeeze(1)  # (batch, r)
-                # xB: (batch, r), A: (batch, m_out, r) -> xB @ A.T: (batch, m_out)
-                perturbation = torch.bmm(xB.unsqueeze(1), A_batch.transpose(-1, -2)).squeeze(1)
-                
-                current_input = base_out + perturbation
-                layer_idx += 1
-                
-            elif isinstance(module, (nn.ReLU, nn.Tanh, nn.Sigmoid, nn.GELU)):
-                current_input = module(current_input)
-            elif isinstance(module, nn.Sequential):
-                pass
+                if evolve:
+                    operations.append(('linear_evolve', (W, bias, param_key)))
+                else:
+                    operations.append(('linear_noevolve', (W, bias)))
+                    
+            elif isinstance(module, nn.ReLU):
+                operations.append(('relu', None))
+            elif isinstance(module, nn.Tanh):
+                operations.append(('tanh', None))
+            elif isinstance(module, nn.Sigmoid):
+                operations.append(('sigmoid', None))
+            elif isinstance(module, nn.GELU):
+                operations.append(('gelu', None))
             elif isinstance(module, nn.Dropout):
-                current_input = module(current_input)
-            elif isinstance(module, nn.BatchNorm1d):
-                current_input = module(current_input)
+                operations.append(('dropout', module))
             elif isinstance(module, nn.LayerNorm):
-                current_input = module(current_input)
+                operations.append(('layernorm', module))
+            elif isinstance(module, nn.BatchNorm1d):
+                operations.append(('batchnorm', module))
+            # Skip Sequential, Module containers
         
-        return current_input
+        # Base key incorporating seed and epoch
+        base_key = torch.tensor(
+            (self._seed * 2654435761 + effective_epoch * 2246822519) & 0xFFFFFFFF,
+            dtype=torch.int64, device=x.device
+        )
+        
+        # Capture strategy params for closure
+        rank = self._rank
+        sigma = self._sigma
+        
+        # Define single-member forward (will be vmapped)
+        def single_member_forward(member_key: torch.Tensor, sign: torch.Tensor, xi: torch.Tensor) -> torch.Tensor:
+            """Forward pass for a single population member with on-the-fly RNG."""
+            current = xi
+            
+            for op_type, op_data in operations:
+                if op_type == 'linear_evolve':
+                    W, bias, param_key = op_data
+                    m_out, n_in = W.shape
+                    r = min(rank, m_out, n_in)
+                    sigma_scaled = sigma / math.sqrt(r)
+                    
+                    # Fold in layer key to get layer-specific RNG
+                    layer_key = _fold_in(member_key, torch.tensor(param_key, dtype=torch.int64, device=xi.device))
+                    
+                    # Generate A, B on-the-fly
+                    factors = _random_normal(layer_key, (m_out + n_in, r), xi.dtype, xi.device)
+                    A = factors[:m_out]   # (m_out, r)
+                    B = factors[m_out:]   # (n_in, r)
+                    
+                    # Apply sigma and antithetic sign to A
+                    A = A * (sigma_scaled * sign)
+                    
+                    # Forward: x @ W.T + bias + x @ B @ A.T
+                    base_out = current @ W.T
+                    if bias is not None:
+                        base_out = base_out + bias
+                    
+                    # Low-rank perturbation
+                    xB = current @ B
+                    pert = xB @ A.T
+                    current = base_out + pert
+                    
+                elif op_type == 'linear_noevolve':
+                    W, bias = op_data
+                    current = current @ W.T
+                    if bias is not None:
+                        current = current + bias
+                        
+                elif op_type == 'relu':
+                    current = torch.relu(current)
+                elif op_type == 'tanh':
+                    current = torch.tanh(current)
+                elif op_type == 'sigmoid':
+                    current = torch.sigmoid(current)
+                elif op_type == 'gelu':
+                    current = torch.nn.functional.gelu(current)
+                elif op_type == 'dropout':
+                    # Dropout in eval mode does nothing
+                    module = op_data
+                    if module.training:
+                        current = torch.nn.functional.dropout(current, p=module.p, training=True)
+                elif op_type == 'layernorm':
+                    module = op_data
+                    current = torch.nn.functional.layer_norm(
+                        current, module.normalized_shape, module.weight, module.bias, module.eps
+                    )
+                elif op_type == 'batchnorm':
+                    # BatchNorm is tricky with vmap - use running stats
+                    module = op_data
+                    current = torch.nn.functional.batch_norm(
+                        current.unsqueeze(0), module.running_mean, module.running_var,
+                        module.weight, module.bias, False, 0.0, module.eps
+                    ).squeeze(0)
+            
+            return current
+        
+        # Compute per-member keys
+        member_keys = vmap(lambda mid: _fold_in(base_key, mid))(effective_member_ids)
+        
+        # vmap over (member_key, sign, x) - each sample gets its own member
+        outputs = vmap(single_member_forward)(member_keys, signs, x)
+        
+        return outputs
     
     def step(self, fitnesses: torch.Tensor, prenormalized: bool = False) -> Dict[str, Any]:
         """

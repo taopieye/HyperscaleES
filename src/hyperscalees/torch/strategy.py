@@ -15,9 +15,6 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Iterator, List, Tuple, Union, ContextManager, Set, Callable
 from dataclasses import dataclass, field
 
-# Import vmap from torch.func (PyTorch 2.0+)
-from torch.func import vmap
-
 from .perturbation import Perturbation, PerturbationContext
 
 
@@ -778,81 +775,46 @@ class EggrollStrategy(BaseStrategy):
             for i in range(population_size)
         ]
     
-    def _get_batched_seeds(self, population_size: int, epoch: int, param_key: int) -> torch.Tensor:
-        """
-        Compute deterministic seeds for all population members at once.
-        
-        Returns:
-            Tensor of shape (population_size,) with seeds for each member.
-        """
-        # Compute effective epoch (for noise reuse)
-        if self._noise_reuse == 0:
-            effective_epoch = 0
-        else:
-            effective_epoch = epoch // self._noise_reuse
-        
-        # Compute effective member IDs (for antithetic sampling)
-        member_ids = torch.arange(population_size)
-        if self._antithetic:
-            effective_members = member_ids // 2
-        else:
-            effective_members = member_ids
-        
-        # Vectorized seed computation
-        seeds = (
-            self._seed * 1000003 + 
-            effective_epoch * 1009 + 
-            effective_members * 10007 + 
-            param_key
-        ) % (2**31 - 1)
-        
-        return seeds
-    
     def _generate_all_perturbations(
         self,
-        m_out: int,
-        n_in: int, 
-        r: int,
+        param: torch.Tensor,
         population_size: int,
         epoch: int,
-        param_key: int,
-        device: torch.device,
-        dtype: torch.dtype
+        param_name: str
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Generate all low-rank perturbation factors for all population members.
         
-        Uses a single large random tensor generation then reshapes, avoiding Python loops.
+        Uses the same seeding as _sample_perturbation to ensure consistency
+        between batched_forward and get_factors.
         
         Returns:
             all_A: (population_size, m_out, r) - already scaled by sigma and antithetic sign
             all_B: (population_size, n_in, r)
         """
-        # Create a master generator from the combined seed
-        master_seed = (self._seed * 1000003 + epoch * 1009 + param_key) % (2**31 - 1)
-        gen = torch.Generator(device='cpu')
-        gen.manual_seed(master_seed)
+        # Get dimensions
+        if param.dim() < 2:
+            m_out, n_in = param.shape[0], 1
+        else:
+            m_out, n_in = param.shape[0], param.shape[1]
+        r = min(self._rank, m_out, n_in)
         
-        # Generate all random numbers at once: (population_size, m_out + n_in, r)
-        all_random = torch.randn(
-            (population_size, m_out + n_in, r),
-            dtype=dtype,
-            generator=gen
-        ).to(device)
+        # Pre-allocate tensors
+        all_A = torch.empty((population_size, m_out, r), dtype=param.dtype, device=param.device)
+        all_B = torch.empty((population_size, n_in, r), dtype=param.dtype, device=param.device)
         
-        # Split into A and B (following JAX: B is first n_in rows, A is next m_out)
-        all_B = all_random[:, :n_in, :]      # (population_size, n_in, r)
-        all_A = all_random[:, n_in:, :]      # (population_size, m_out, r)
-        
-        # Apply sigma scaling
-        sigma_scaled = self._sigma / math.sqrt(r)
-        all_A = all_A * sigma_scaled
-        
-        # Apply antithetic sign: odd members get negative A
-        if self._antithetic:
-            signs = torch.ones(population_size, 1, 1, device=device, dtype=dtype)
-            signs[1::2] = -1.0
-            all_A = all_A * signs
+        # Generate perturbations using the same seeding as _sample_perturbation
+        # This ensures consistency between batched_forward and get_factors
+        for i in range(population_size):
+            pert = self._sample_perturbation(param, i, epoch, param_name)
+            A, B = pert.factors
+            # _sample_perturbation returns 2D for 1D params, handle that
+            if param.dim() < 2:
+                all_A[i] = A.unsqueeze(-1) if A.dim() == 1 else A
+                all_B[i] = B.unsqueeze(-1) if B.dim() == 1 else B
+            else:
+                all_A[i] = A
+                all_B[i] = B
         
         return all_A, all_B
     
@@ -865,14 +827,14 @@ class EggrollStrategy(BaseStrategy):
         population_size: int
     ) -> torch.Tensor:
         """
-        Efficient batched forward pass with low-rank perturbations using vmap.
+        Efficient batched forward pass with low-rank perturbations.
         
-        For each linear layer, computes:
-            output[i] = x[i] @ W.T + bias + x[i] @ B[member_ids[i]] @ A[member_ids[i]].T
+        For each linear layer, computes (following JAX EGGROLL do_mm):
+            output = x @ W.T + bias + x @ B @ A.T
         
-        Uses torch.vmap for efficient batched computation, following JAX EGGROLL.
+        Where A, B are the low-rank perturbation factors.
+        Uses einsum for efficient batched computation without Python loops.
         """
-        batch_size = x.shape[0]
         current_input = x
         
         # Build param_name -> param mapping once
@@ -886,13 +848,8 @@ class EggrollStrategy(BaseStrategy):
                 param_name = param_names.get(id(W), f"{name}.weight" if name else "weight")
                 
                 if self._should_evolve_param(param_name, W):
-                    m_out, n_in = W.shape
-                    r = min(self._rank, m_out, n_in)
-                    param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
-                    
                     all_A, all_B = self._generate_all_perturbations(
-                        m_out, n_in, r, population_size, epoch, param_key,
-                        x.device, x.dtype
+                        W, population_size, epoch, param_name
                     )
                     layer_perturbations[name] = (all_A, all_B)
         
@@ -917,19 +874,20 @@ class EggrollStrategy(BaseStrategy):
                 A_batch = all_A[member_ids]  # (batch_size, m_out, r)
                 B_batch = all_B[member_ids]  # (batch_size, n_in, r)
                 
-                # Use vmap to compute perturbed forward for all samples
-                # Define the single-sample function inline to capture W and bias
-                def perturbed_linear_single(x_single, A_single, B_single):
-                    # x @ W.T + bias + x @ B @ A.T
-                    out = x_single @ W.T
-                    if bias is not None:
-                        out = out + bias
-                    out = out + (x_single @ B_single) @ A_single.T
-                    return out
+                # Compute: x @ W.T + bias + x @ B @ A.T
+                # Base forward
+                base_out = current_input @ W.T  # (batch, m_out)
+                if bias is not None:
+                    base_out = base_out + bias
                 
-                # vmap over batch dimension (x, A, B all have batch dim 0)
-                vmapped_linear = vmap(perturbed_linear_single, in_dims=(0, 0, 0))
-                current_input = vmapped_linear(current_input, A_batch, B_batch)
+                # Low-rank perturbation: x @ B @ A.T
+                # x: (batch, n_in), B: (batch, n_in, r), A: (batch, m_out, r)
+                # x @ B -> einsum('bi,bir->br', x, B) -> (batch, r)
+                # then @ A.T -> einsum('br,bor->bo', ..., A) -> (batch, m_out)
+                # Combined: einsum('bi,bir,bor->bo', x, B, A)
+                perturbation = torch.einsum('bi,bir,bor->bo', current_input, B_batch, A_batch)
+                
+                current_input = base_out + perturbation
                 
             elif isinstance(module, (nn.ReLU, nn.Tanh, nn.Sigmoid, nn.GELU)):
                 current_input = module(current_input)

@@ -2,9 +2,7 @@
 """
 Benchmark script for batched forward pass performance.
 
-Compares:
-1. batched_forward (the optimized path using einsum)
-2. Sequential iteration (for comparison)
+Tests batched_forward throughput at different population sizes.
 
 Run with: python experiments/benchmark_batched_forward.py
 """
@@ -64,45 +62,6 @@ def benchmark_batched_forward(
     return elapsed / num_iterations, outputs.shape
 
 
-def benchmark_sequential(
-    model: nn.Module,
-    strategy: EggrollStrategy,
-    pop_size: int,
-    input_dim: int,
-    device: str,
-    num_iterations: int = 100,
-    warmup: int = 10
-):
-    """Benchmark sequential iteration (for comparison)."""
-    x = torch.randn(1, input_dim, device=device)
-    
-    # Warmup
-    for i in range(warmup):
-        with strategy.perturb(pop_size, epoch=i) as pop:
-            for member_id in range(min(pop_size, 10)):  # Only warmup on a few
-                _ = pop.evaluate_member(member_id, model, x)
-    if device == "cuda":
-        torch.cuda.synchronize()
-    
-    # Benchmark (use smaller pop for sequential since it's slow)
-    seq_pop_size = min(pop_size, 64)
-    start = time.perf_counter()
-    for i in range(num_iterations):
-        with strategy.perturb(seq_pop_size, epoch=i) as pop:
-            outputs = []
-            for member_id in range(seq_pop_size):
-                out = pop.evaluate_member(member_id, model, x)
-                outputs.append(out)
-    if device == "cuda":
-        torch.cuda.synchronize()
-    elapsed = time.perf_counter() - start
-    
-    # Extrapolate to full population size
-    extrapolated = (elapsed / num_iterations) * (pop_size / seq_pop_size)
-    
-    return extrapolated, seq_pop_size
-
-
 def main():
     print("=" * 70)
     print("EGGROLL Batched Forward Benchmark")
@@ -121,15 +80,7 @@ def main():
         {"pop_size": 2048, "input_dim": 128, "hidden_dim": 256, "output_dim": 64, "num_layers": 4},
     ]
     
-    if device == "cpu":
-        # Reduce sizes for CPU testing
-        configs = [
-            {"pop_size": 32, "input_dim": 32, "hidden_dim": 64, "output_dim": 16, "num_layers": 2},
-            {"pop_size": 64, "input_dim": 64, "hidden_dim": 128, "output_dim": 32, "num_layers": 3},
-        ]
-        num_iterations = 10
-    else:
-        num_iterations = 100
+    num_iterations = 100
     
     print(f"\nRunning {num_iterations} iterations per benchmark")
     print("-" * 70)
@@ -160,14 +111,6 @@ def main():
         print(f"  batched_forward: {batched_time*1000:.2f} ms")
         print(f"    Output shape: {output_shape}")
         print(f"    Throughput: {pop_size / batched_time:,.0f} evals/sec")
-        
-        # Benchmark sequential (for comparison)
-        if pop_size <= 512:  # Skip for very large populations
-            seq_time, actual_seq_pop = benchmark_sequential(
-                model, strategy, pop_size, input_dim, device, num_iterations
-            )
-            print(f"  sequential (extrapolated from {actual_seq_pop}): {seq_time*1000:.2f} ms")
-            print(f"    Speedup: {seq_time / batched_time:.1f}x")
     
     print("\n" + "=" * 70)
     print("Benchmark complete!")

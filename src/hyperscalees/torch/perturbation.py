@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 from .triton_kernels import (
     generate_lowrank_factors_torch,
     batched_perturbed_linear_torch,
+    fused_perturbed_linear_v2,
 )
 
 
@@ -158,7 +159,7 @@ class PerturbationContext:
         self._population_size = population_size
         self._epoch = epoch
         self._active = False
-        self._cached_factors: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
+        self._param_ids: Dict[str, int] = {}  # param_name -> param_id for fused kernels
         self._current_member_id: Optional[int] = None
         
         # Original forward hooks (to restore after context)
@@ -178,58 +179,21 @@ class PerturbationContext:
         """Enter the perturbation context."""
         self._active = True
         self._strategy._current_context = self  # Set for nested context check
-        self._generate_all_factors()
+        # Build param_id mapping for fused kernels (no factor pre-generation needed)
+        self._param_ids = {}
+        for param_id, (name, param) in enumerate(self._strategy._es_params.items()):
+            if param.ndim == 2:
+                self._param_ids[name] = param_id
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Exit the perturbation context."""
         self._active = False
         self._strategy._current_context = None  # Clear for nested context check
-        self._cached_factors.clear()
+        self._param_ids.clear()
         self._current_member_id = None
         self._restore_original_forwards()
         return False
-    
-    def _generate_all_factors(self) -> None:
-        """
-        Pre-generate all low-rank factors for all population members.
-        
-        This is done once when entering the context. The factors are stored
-        in a compact form: (population_size, dim1, rank) and (population_size, dim2, rank).
-        
-        For true on-the-fly generation (Triton), this would instead store
-        just the seeds and generate during batched_forward.
-        """
-        if self._strategy.model is None:
-            raise RuntimeError("Strategy not set up. Call strategy.setup(model) first.")
-        
-        model = self._strategy.model
-        device = next(model.parameters()).device
-        
-        for param_id, (name, param) in enumerate(self._strategy._es_params.items()):
-            if param.ndim != 2:
-                # Only apply low-rank to 2D params (weights)
-                continue
-            
-            out_features, in_features = param.shape
-            member_ids = torch.arange(self._population_size, device=device)
-            
-            A, B = generate_lowrank_factors_torch(
-                out_features=out_features,
-                in_features=in_features,
-                rank=self._strategy.rank,
-                seed=self._strategy._seed,
-                epoch=self._epoch,
-                member_ids=member_ids,
-                param_id=param_id,
-                sigma=self._strategy.sigma,
-                noise_reuse=self._strategy.noise_reuse,
-                antithetic=self._strategy.antithetic,
-                device=device,
-                dtype=param.dtype,
-            )
-            
-            self._cached_factors[name] = (A, B)
     
     def _restore_original_forwards(self) -> None:
         """Restore original forward methods after iteration."""
@@ -246,6 +210,8 @@ class PerturbationContext:
         """
         Get low-rank factors (A, B) for a specific member and parameter.
         
+        Generates factors on-demand using the same seeding as the fused kernel.
+        
         Args:
             member_id: Population member index
             param_name: Name of the parameter (e.g., "0.weight")
@@ -257,11 +223,32 @@ class PerturbationContext:
         if not self._active:
             raise RuntimeError("get_factors() must be called within perturb() context")
         
-        if param_name not in self._cached_factors:
-            raise KeyError(f"Parameter '{param_name}' not found. Available: {list(self._cached_factors.keys())}")
+        if param_name not in self._param_ids:
+            raise KeyError(f"Parameter '{param_name}' not found. Available: {list(self._param_ids.keys())}")
         
-        A_all, B_all = self._cached_factors[param_name]
-        return A_all[member_id], B_all[member_id]
+        param_id = self._param_ids[param_name]
+        param = self._strategy._es_params[param_name]
+        out_features, in_features = param.shape
+        device = param.device
+        
+        # Generate factors for this single member
+        member_ids = torch.tensor([member_id], device=device)
+        A_all, B_all = generate_lowrank_factors_torch(
+            out_features=out_features,
+            in_features=in_features,
+            rank=self._strategy.rank,
+            seed=self._strategy._seed,
+            epoch=self._epoch,
+            member_ids=member_ids,
+            param_id=param_id,
+            sigma=self._strategy.sigma,
+            noise_reuse=self._strategy.noise_reuse,
+            antithetic=self._strategy.antithetic,
+            device=device,
+            dtype=param.dtype,
+        )
+        
+        return A_all[0], B_all[0]
     
     def batched_forward(
         self,
@@ -389,7 +376,7 @@ class PerturbationContext:
         try:
             # Install hooks
             for module, param_name in module_to_param_name.items():
-                if param_name in self._cached_factors:
+                if param_name in self._param_ids:
                     h = module.register_forward_hook(make_hook(param_name))
                     hooks.append(h)
             
@@ -410,20 +397,41 @@ class PerturbationContext:
         """
         Apply a single perturbed linear layer.
         
+        Uses two-step approach (generate factors + batched matmul) which is
+        faster than fused kernel because Triton's randn inside kernel loops is slow.
+        
         Computes: out[i] = x[i] @ W.T + x[i] @ B[member_ids[i]] @ A[member_ids[i]].T + bias
         """
-        if param_name not in self._cached_factors:
+        if param_name not in self._param_ids:
             # This parameter isn't being perturbed (e.g., bias)
             return linear(x)
         
-        A_all, B_all = self._cached_factors[param_name]
+        param_id = self._param_ids[param_name]
+        out_features, in_features = linear.weight.shape
         
+        # Generate factors using Triton kernel
+        A, B = generate_lowrank_factors_torch(
+            out_features=out_features,
+            in_features=in_features,
+            rank=self._strategy.rank,
+            seed=self._strategy._seed,
+            epoch=self._epoch,
+            member_ids=member_ids,
+            param_id=param_id,
+            sigma=self._strategy.sigma,
+            noise_reuse=self._strategy.noise_reuse,
+            antithetic=self._strategy.antithetic,
+            device=x.device,
+            dtype=x.dtype,
+        )
+        
+        # Use fast batched matmul
         return batched_perturbed_linear_torch(
             x=x,
             weight=linear.weight,
             bias=linear.bias,
-            A=A_all,
-            B=B_all,
+            A=A,
+            B=B,
             member_ids=member_ids,
         )
     
@@ -470,7 +478,7 @@ class PerturbationContext:
                 param_name = f"{name}.weight" if name else "weight"
                 
                 # Skip if no perturbation for this param
-                if param_name not in self._cached_factors:
+                if param_name not in self._param_ids:
                     continue
                 
                 # Save original forward

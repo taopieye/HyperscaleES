@@ -393,6 +393,7 @@ def main():
     # General args
     parser.add_argument("--generations", "-g", type=int, default=30, help="Number of generations")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--quick", action="store_true", help="Quick test with smaller populations (128/64)")
     
     # Use paper's hyperparameters as defaults
     # EGGROLL-specific (can be overridden)
@@ -411,6 +412,13 @@ def main():
     parser.add_argument("--n-layers", type=int, default=3, help="Number of hidden layers")
     
     args = parser.parse_args()
+    
+    # Quick mode: use smaller populations for testing
+    if args.quick:
+        args.eggroll_pop = 128
+        args.openes_pop = 64
+        args.generations = min(args.generations, 10)
+        console.print("[yellow]⚡ Quick mode: pop=128/64, gen≤10[/yellow]\n")
     
     # Check dependencies
     if not GYM_AVAILABLE:

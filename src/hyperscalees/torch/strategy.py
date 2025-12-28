@@ -69,6 +69,7 @@ class BaseStrategy(ABC):
         optimizer: str = "sgd",
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
+        generator: Optional[torch.Generator] = None,
         fitness_transform: Optional[Union[str, Callable[[torch.Tensor], torch.Tensor]]] = "centered_rank",
         evolve_params: Optional[List[str]] = None,
         exclude_params: Optional[List[str]] = None,
@@ -84,6 +85,8 @@ class BaseStrategy(ABC):
             optimizer: Optimizer type ("sgd", "adam", "rmsprop").
             optimizer_kwargs: Additional kwargs for the optimizer.
             seed: Random seed for reproducibility.
+            generator: DEPRECATED. Kept for API compatibility only. The seed is extracted
+                from the generator but all RNG now uses Triton's tl.rand() on-the-fly.
             fitness_transform: Transform for fitness normalization. Can be:
                 - "rank": Rank-based transform
                 - "centered_rank": Centered rank-based transform (default)
@@ -98,7 +101,15 @@ class BaseStrategy(ABC):
         self._noise_reuse = noise_reuse
         self._optimizer_type = optimizer
         self._optimizer_kwargs = optimizer_kwargs or {}
-        self._seed = seed if seed is not None else torch.randint(0, 2**31, (1,)).item()
+        
+        # Handle seed/generator
+        if generator is not None:
+            # Extract seed from generator state (approximate)
+            self._seed = generator.initial_seed() % (2**31)
+        elif seed is not None:
+            self._seed = seed
+        else:
+            self._seed = torch.randint(0, 2**31, (1,)).item()
         
         # Validate and set fitness transform
         if isinstance(fitness_transform, str):
@@ -166,6 +177,34 @@ class BaseStrategy(ABC):
     def device(self) -> Optional[torch.device]:
         """Device of the model."""
         return self._device
+    
+    def get_antithetic_partner(self, member_id: int) -> int:
+        """
+        Get the antithetic partner index for a population member.
+        
+        Member 2k pairs with member 2k+1.
+        """
+        if member_id % 2 == 0:
+            return member_id + 1
+        else:
+            return member_id - 1
+    
+    def is_positive_perturbation(self, member_id: int) -> bool:
+        """
+        Check if member uses positive (+ε) or negative (-ε) perturbation.
+        
+        Even indices (0, 2, 4, ...) use positive perturbation.
+        Odd indices (1, 3, 5, ...) use negative perturbation.
+        """
+        return member_id % 2 == 0
+    
+    def normalize_fitnesses(self, fitnesses: torch.Tensor) -> torch.Tensor:
+        """
+        Apply fitness normalization/transformation.
+        
+        This is the public API for fitness transformation.
+        """
+        return self._apply_fitness_transform(fitnesses)
     
     def _should_evolve_param(self, param_name: str, param: torch.Tensor) -> bool:
         """
@@ -419,6 +458,15 @@ class BaseStrategy(ABC):
         
         if epoch is None:
             epoch = self._current_epoch
+        
+        # Warn if antithetic is enabled but population size is odd
+        if self._antithetic and population_size % 2 != 0:
+            import warnings
+            warnings.warn(
+                f"Antithetic sampling is enabled but population_size={population_size} is odd. "
+                "One member will not have an antithetic partner. Consider using an even population size.",
+                UserWarning
+            )
         
         return PerturbationContext(self, population_size, epoch)
 

@@ -735,9 +735,9 @@ class EggrollStrategy:
             "param_delta_norm": param_delta_norm,
         }
         
-        # Call on_step callbacks (pass kwargs only, not self)
+        # Call on_step callbacks (pass only metrics)
         for callback in self._callbacks["on_step"]:
-            callback(metrics=metrics, epoch=epoch)
+            callback(metrics=metrics)
         
         return metrics
     

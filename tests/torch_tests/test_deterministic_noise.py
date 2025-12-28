@@ -308,35 +308,6 @@ class TestSeedManagement:
         assert torch.equal(pert1.as_matrix(), pert2.as_matrix()), \
             "Same seed should produce identical perturbations"
 
-    def test_strategy_accepts_generator(self, simple_linear, device):
-        """
-        Strategy should accept torch.Generator for advanced use.
-        
-        TARGET API:
-            gen = torch.Generator().manual_seed(42)
-            strategy = EggrollStrategy(sigma=0.1, lr=0.01, generator=gen)
-        """
-        from hyperscalees.torch import EggrollStrategy
-        
-        gen = torch.Generator(device=device).manual_seed(42)
-        
-        strategy = EggrollStrategy(
-            sigma=0.1,
-            lr=0.01,
-            rank=4,
-            generator=gen
-        )
-        strategy.setup(simple_linear)
-        
-        # Should work without errors
-        pert = strategy._sample_perturbation(
-            param=simple_linear.weight,
-            member_id=0,
-            epoch=0
-        )
-        assert pert is not None, \
-            "Strategy with custom generator should produce a valid perturbation"
-
     def test_different_seeds_produce_different_noise(self, simple_linear, device):
         """
         Different seeds should produce different perturbations.

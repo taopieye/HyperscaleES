@@ -69,7 +69,6 @@ class BaseStrategy(ABC):
         optimizer: str = "sgd",
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
-        generator: Optional[torch.Generator] = None,
         fitness_transform: Optional[Union[str, Callable[[torch.Tensor], torch.Tensor]]] = "centered_rank",
         evolve_params: Optional[List[str]] = None,
         exclude_params: Optional[List[str]] = None,
@@ -84,9 +83,7 @@ class BaseStrategy(ABC):
             noise_reuse: Number of epochs to reuse the same noise. 0 means new noise each epoch.
             optimizer: Optimizer type ("sgd", "adam", "rmsprop").
             optimizer_kwargs: Additional kwargs for the optimizer.
-            seed: Random seed for reproducibility.
-            generator: DEPRECATED. Kept for API compatibility only. The seed is extracted
-                from the generator but all RNG now uses Triton's tl.rand() on-the-fly.
+            seed: Random seed for reproducibility. All RNG uses Triton's tl.rand() on-the-fly.
             fitness_transform: Transform for fitness normalization. Can be:
                 - "rank": Rank-based transform
                 - "centered_rank": Centered rank-based transform (default)
@@ -101,15 +98,7 @@ class BaseStrategy(ABC):
         self._noise_reuse = noise_reuse
         self._optimizer_type = optimizer
         self._optimizer_kwargs = optimizer_kwargs or {}
-        
-        # Handle seed/generator
-        if generator is not None:
-            # Extract seed from generator state (approximate)
-            self._seed = generator.initial_seed() % (2**31)
-        elif seed is not None:
-            self._seed = seed
-        else:
-            self._seed = torch.randint(0, 2**31, (1,)).item()
+        self._seed = seed if seed is not None else torch.randint(0, 2**31, (1,)).item()
         
         # Validate and set fitness transform
         if isinstance(fitness_transform, str):

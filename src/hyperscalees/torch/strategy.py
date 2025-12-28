@@ -15,8 +15,6 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Iterator, List, Tuple, Union, ContextManager, Set, Callable
 from dataclasses import dataclass, field
 
-from torch.func import vmap
-
 from .perturbation import Perturbation, PerturbationContext
 
 
@@ -671,7 +669,7 @@ class EggrollStrategy(BaseStrategy):
         """
         Sample a low-rank perturbation for a parameter.
         
-        Uses the same seeding as _generate_all_perturbations to ensure consistency.
+        Uses the same hash-based RNG as _batched_forward_impl to ensure consistency.
         
         For antithetic sampling:
         - Even member_id (0, 2, 4, ...): +ε
@@ -695,38 +693,52 @@ class EggrollStrategy(BaseStrategy):
         # For antithetic, pairs share same base noise
         if self._antithetic:
             effective_member = member_id // 2
+            sign = 1.0 if member_id % 2 == 0 else -1.0
         else:
             effective_member = member_id
+            sign = 1.0
         
-        # Use same master seed as _generate_all_perturbations
+        # Use same hash-based RNG as _batched_forward_impl
         param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
-        master_seed = (self._seed * 1000003 + effective_epoch * 1009 + param_key) % (2**31 - 1)
-        gen = torch.Generator(device='cpu')
-        gen.manual_seed(master_seed)
         
-        # Generate (effective_member + 1) rows to get this member's values
-        # This is inefficient for single member but maintains consistency
-        all_random = torch.randn(
-            (effective_member + 1, m + n, r),
-            dtype=param.dtype,
-            generator=gen
-        )
+        # Compute seed using same formula as _batched_forward_impl
+        base_seed_component = self._seed * 0x9E3779B97F4A7C15 + effective_epoch * 0x85EBCA6B
+        member_seed_component = effective_member * 0xBF58476D1CE4E5B9
+        layer_seed = (base_seed_component + member_seed_component + param_key * 0x94D049BB133111EB) % (2**62)
         
-        # Extract this member's row
-        combined = all_random[effective_member].to(param.device)
+        # Generate random numbers using same hash approach
+        numel = (m + n) * r
+        counters = torch.arange(numel, device=param.device, dtype=torch.int64)
+        
+        # SplitMix64-style mixing
+        mixed = layer_seed + counters
+        mixed = (mixed ^ (mixed >> 30)) * 0xBF58476D1CE4E5B9
+        mixed = (mixed ^ (mixed >> 27)) * 0x94D049BB133111EB
+        mixed = mixed ^ (mixed >> 31)
+        
+        # Convert to uniform then normal via Box-Muller
+        uniform = ((mixed & 0x7FFFFFFFFFFFFFFF).float() / (2**63)).to(param.dtype)
+        
+        # Box-Muller transform
+        if numel % 2 == 1:
+            uniform = torch.cat([uniform, uniform[:1]])
+        uniform = uniform.view(-1, 2)
+        u1 = uniform[:, 0].clamp(min=1e-10)
+        u2 = uniform[:, 1]
+        
+        radius = torch.sqrt(-2 * torch.log(u1))
+        theta = 2 * math.pi * u2
+        z0 = radius * torch.cos(theta)
+        z1 = radius * torch.sin(theta)
+        
+        normal = torch.stack([z0, z1], dim=-1).flatten()[:numel]
+        combined = normal.view(m + n, r)
         
         A = combined[:m]  # (m, r)
         B = combined[m:]  # (n, r)
         
-        # Apply sigma scaling
+        # Apply sigma scaling and antithetic sign
         sigma_scaled = self._sigma / math.sqrt(r)
-        
-        # Apply antithetic sign
-        if self._antithetic and member_id % 2 == 1:
-            sign = -1.0
-        else:
-            sign = 1.0
-        
         A = A * sigma_scaled * sign
         
         if is_1d:
@@ -758,8 +770,7 @@ class EggrollStrategy(BaseStrategy):
         """
         Generate all low-rank perturbation factors for all population members.
         
-        Generates all random numbers in a single tensor operation, then applies
-        sigma scaling and antithetic signs vectorized.
+        Uses the same hash-based RNG as _batched_forward_impl for consistency.
         
         Returns:
             all_A: (population_size, m_out, r) - already scaled by sigma and antithetic sign
@@ -778,48 +789,66 @@ class EggrollStrategy(BaseStrategy):
         else:
             effective_epoch = epoch // self._noise_reuse
         
-        # For antithetic sampling, pairs share the same base noise
-        # Member 0,1 share noise from seed 0; members 2,3 share from seed 1, etc.
-        if self._antithetic:
-            num_unique = (population_size + 1) // 2
-        else:
-            num_unique = population_size
-        
-        # Generate all random factors at once using a master seed
+        # Get param key
         param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
-        master_seed = (self._seed * 1000003 + effective_epoch * 1009 + param_key) % (2**31 - 1)
-        gen = torch.Generator(device='cpu')
-        gen.manual_seed(master_seed)
         
-        # Generate (num_unique, m_out + n_in, r) random values
-        all_random = torch.randn(
-            (num_unique, m_out + n_in, r),
-            dtype=param.dtype,
-            generator=gen
-        ).to(param.device)
+        # Compute base seed components (same as _batched_forward_impl)
+        base_seed_component = self._seed * 0x9E3779B97F4A7C15 + effective_epoch * 0x85EBCA6B
         
-        # Split: A is first m_out, B is last n_in (matching _sample_perturbation)
-        unique_A = all_random[:, :m_out, :]  # (num_unique, m_out, r)
-        unique_B = all_random[:, m_out:, :]  # (num_unique, n_in, r)
-        
-        # Expand to full population (for antithetic, duplicate each)
+        # For antithetic, pairs share base noise
         if self._antithetic:
-            # Each pair (0,1), (2,3), etc. uses the same base noise
-            indices = torch.arange(population_size, device=param.device) // 2
-            all_A = unique_A[indices]  # (population_size, m_out, r)
-            all_B = unique_B[indices]  # (population_size, n_in, r)
-            
-            # Apply antithetic sign to A: even members +, odd members -
+            effective_member_ids = torch.arange(population_size, device=param.device) // 2
             signs = torch.ones(population_size, 1, 1, device=param.device, dtype=param.dtype)
             signs[1::2] = -1.0
-            all_A = all_A * signs
         else:
-            all_A = unique_A
-            all_B = unique_B
+            effective_member_ids = torch.arange(population_size, device=param.device)
+            signs = torch.ones(population_size, 1, 1, device=param.device, dtype=param.dtype)
         
-        # Apply sigma scaling
+        # Compute per-member seeds
+        member_seed_component = effective_member_ids.to(torch.int64) * 0xBF58476D1CE4E5B9
+        layer_seeds = (base_seed_component + member_seed_component + param_key * 0x94D049BB133111EB) % (2**62)
+        
+        # Generate random numbers using hash-based RNG
+        numel_per_member = (m_out + n_in) * r
+        counters = torch.arange(numel_per_member, device=param.device, dtype=torch.int64)
+        
+        # Expand for broadcasting: seeds (pop, 1), counters (1, numel)
+        seeds_expanded = layer_seeds.unsqueeze(-1)
+        counters_expanded = counters.unsqueeze(0)
+        
+        # SplitMix64-style mixing
+        mixed = seeds_expanded + counters_expanded
+        mixed = (mixed ^ (mixed >> 30)) * 0xBF58476D1CE4E5B9
+        mixed = (mixed ^ (mixed >> 27)) * 0x94D049BB133111EB
+        mixed = mixed ^ (mixed >> 31)
+        
+        # Convert to uniform then normal via Box-Muller
+        uniform = ((mixed & 0x7FFFFFFFFFFFFFFF).float() / (2**63)).to(param.dtype)
+        
+        # Box-Muller transform
+        batch_size = population_size
+        uniform = uniform.view(batch_size, -1, 2)
+        u1 = uniform[..., 0].clamp(min=1e-10)
+        u2 = uniform[..., 1]
+        
+        radius = torch.sqrt(-2 * torch.log(u1))
+        theta = 2 * math.pi * u2
+        z0 = radius * torch.cos(theta)
+        z1 = radius * torch.sin(theta)
+        
+        normal = torch.stack([z0, z1], dim=-1).view(batch_size, -1)
+        normal = normal[:, :numel_per_member]
+        
+        # Reshape to (pop, m_out + n_in, r)
+        all_factors = normal.view(batch_size, m_out + n_in, r)
+        
+        # Split into A and B
+        all_A = all_factors[:, :m_out, :]
+        all_B = all_factors[:, m_out:, :]
+        
+        # Apply sigma scaling and antithetic sign
         sigma_scaled = self._sigma / math.sqrt(r)
-        all_A = all_A * sigma_scaled
+        all_A = all_A * sigma_scaled * signs
         
         return all_A, all_B
     
@@ -832,34 +861,41 @@ class EggrollStrategy(BaseStrategy):
         population_size: int
     ) -> torch.Tensor:
         """
-        Efficient batched forward pass with low-rank perturbations using vmap.
+        Efficient batched forward pass with low-rank perturbations.
         
-        Following JAX EGGROLL pattern:
-        1. Pre-generate all perturbation factors (A, B) in one tensor op
-        2. Use vmap to compute perturbed forward for each population member
+        Following JAX EGGROLL pattern: generates perturbations on-the-fly
+        using deterministic hash-based random numbers, avoiding memory
+        allocation for storing all perturbations.
         
         For each linear layer computes: output = x @ W.T + bias + x @ B @ A.T
         """
-        batch_size = x.shape[0]
         current_input = x
+        
+        # Compute effective epoch for noise reuse
+        if self._noise_reuse == 0:
+            effective_epoch = 0
+        else:
+            effective_epoch = epoch // self._noise_reuse
+        
+        # Compute effective member IDs (for antithetic, pairs share base noise)
+        if self._antithetic:
+            effective_member_ids = member_ids // 2
+            # Signs: even members +1, odd members -1
+            signs = 1 - 2 * (member_ids % 2).float()
+        else:
+            effective_member_ids = member_ids
+            signs = torch.ones_like(member_ids, dtype=x.dtype)
         
         # Build param_name -> param mapping once
         param_names = {id(p): n for n, p in model.named_parameters()}
         
-        # Pre-generate all perturbations for all linear layers
-        layer_perturbations = {}
-        for name, module in model.named_modules():
-            if isinstance(module, nn.Linear):
-                W = module.weight
-                param_name = param_names.get(id(W), f"{name}.weight" if name else "weight")
-                
-                if self._should_evolve_param(param_name, W):
-                    all_A, all_B = self._generate_all_perturbations(
-                        W, population_size, epoch, param_name
-                    )
-                    layer_perturbations[name] = (all_A, all_B)
+        # Compute combined seeds for each member (vectorized)
+        # These will be used to generate deterministic random numbers
+        base_seed_component = self._seed * 0x9E3779B97F4A7C15 + effective_epoch * 0x85EBCA6B
+        member_seed_component = effective_member_ids.to(torch.int64) * 0xBF58476D1CE4E5B9
         
         # Process each layer
+        layer_idx = 0
         for name, module in model.named_modules():
             if isinstance(module, nn.Linear):
                 W = module.weight
@@ -873,26 +909,77 @@ class EggrollStrategy(BaseStrategy):
                         current_input = current_input + bias
                     continue
                 
-                # Get pre-generated perturbations
-                all_A, all_B = layer_perturbations[name]
+                m_out, n_in = W.shape
+                r = min(self._rank, m_out, n_in)
+                sigma_scaled = self._sigma / math.sqrt(r)
                 
-                # Select perturbations for each sample in the batch
-                A_batch = all_A[member_ids]  # (batch_size, m_out, r)
-                B_batch = all_B[member_ids]  # (batch_size, n_in, r)
+                # Get parameter-specific key
+                param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
                 
-                # Define single-sample forward (captures W, bias)
-                # x: (n_in,), A: (m_out, r), B: (n_in, r)
-                def perturbed_linear(x_single: torch.Tensor, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-                    # Base: x @ W.T + bias
-                    out = x_single @ W.T
-                    if bias is not None:
-                        out = out + bias
-                    # Perturbation: x @ B @ A.T
-                    out = out + (x_single @ B) @ A.T
-                    return out
+                # Compute per-member seeds for this layer
+                layer_seeds = (base_seed_component + member_seed_component + param_key * 0x94D049BB133111EB) % (2**62)
                 
-                # vmap over batch dimension
-                current_input = vmap(perturbed_linear)(current_input, A_batch, B_batch)
+                # Generate random factors on-the-fly using hash-based RNG
+                # Shape: (batch_size, m_out + n_in, r)
+                batch_size = current_input.shape[0]
+                
+                # Vectorized random generation
+                numel_per_member = (m_out + n_in) * r
+                counters = torch.arange(numel_per_member, device=x.device, dtype=torch.int64)
+                
+                # Expand seeds and counters for broadcasting
+                # seeds: (batch_size, 1), counters: (1, numel)
+                seeds_expanded = layer_seeds.unsqueeze(-1)  # (batch_size, 1)
+                counters_expanded = counters.unsqueeze(0)   # (1, numel)
+                
+                # Mix seeds with counters (SplitMix64-style)
+                mixed = seeds_expanded + counters_expanded
+                mixed = (mixed ^ (mixed >> 30)) * 0xBF58476D1CE4E5B9
+                mixed = (mixed ^ (mixed >> 27)) * 0x94D049BB133111EB  
+                mixed = mixed ^ (mixed >> 31)
+                
+                # Convert to uniform [0, 1)
+                uniform = ((mixed & 0x7FFFFFFFFFFFFFFF).float() / (2**63)).to(x.dtype)
+                
+                # Box-Muller transform for normal distribution
+                # Reshape to pairs: (batch_size, numel/2, 2)
+                uniform = uniform.view(batch_size, -1, 2)
+                u1 = uniform[..., 0].clamp(min=1e-10)
+                u2 = uniform[..., 1]
+                
+                radius = torch.sqrt(-2 * torch.log(u1))
+                theta = 2 * math.pi * u2
+                z0 = radius * torch.cos(theta)
+                z1 = radius * torch.sin(theta)
+                
+                # Interleave back to full size
+                normal = torch.stack([z0, z1], dim=-1).view(batch_size, -1)
+                normal = normal[:, :numel_per_member]  # Trim to exact size
+                
+                # Reshape to (batch_size, m_out + n_in, r)
+                all_factors = normal.view(batch_size, m_out + n_in, r)
+                
+                # Split into A and B
+                A_batch = all_factors[:, :m_out, :]  # (batch_size, m_out, r)
+                B_batch = all_factors[:, m_out:, :]  # (batch_size, n_in, r)
+                
+                # Apply sigma scaling and antithetic sign to A
+                A_batch = A_batch * (sigma_scaled * signs.view(-1, 1, 1))
+                
+                # Compute perturbed forward: x @ W.T + bias + x @ B @ A.T
+                # Base forward
+                base_out = current_input @ W.T
+                if bias is not None:
+                    base_out = base_out + bias
+                
+                # Perturbation using batched matrix multiply
+                # x: (batch, n_in), B: (batch, n_in, r) -> xB: (batch, r)
+                xB = torch.bmm(current_input.unsqueeze(1), B_batch).squeeze(1)  # (batch, r)
+                # xB: (batch, r), A: (batch, m_out, r) -> xB @ A.T: (batch, m_out)
+                perturbation = torch.bmm(xB.unsqueeze(1), A_batch.transpose(-1, -2)).squeeze(1)
+                
+                current_input = base_out + perturbation
+                layer_idx += 1
                 
             elif isinstance(module, (nn.ReLU, nn.Tanh, nn.Sigmoid, nn.GELU)):
                 current_input = module(current_input)

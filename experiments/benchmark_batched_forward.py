@@ -47,7 +47,7 @@ def benchmark_batched_forward(
     
     # Warmup
     for i in range(warmup):
-        with strategy.perturb_population(pop_size, epoch=i) as pop:
+        with strategy.perturb(pop_size, epoch=i) as pop:
             _ = pop.batched_forward(model, x)
     if device == "cuda":
         torch.cuda.synchronize()
@@ -55,7 +55,7 @@ def benchmark_batched_forward(
     # Benchmark
     start = time.perf_counter()
     for i in range(num_iterations):
-        with strategy.perturb_population(pop_size, epoch=i) as pop:
+        with strategy.perturb(pop_size, epoch=i) as pop:
             outputs = pop.batched_forward(model, x)
     if device == "cuda":
         torch.cuda.synchronize()
@@ -78,7 +78,7 @@ def benchmark_sequential(
     
     # Warmup
     for i in range(warmup):
-        with strategy.perturb_population(pop_size, epoch=i) as pop:
+        with strategy.perturb(pop_size, epoch=i) as pop:
             for member_id in range(min(pop_size, 10)):  # Only warmup on a few
                 _ = pop.evaluate_member(member_id, model, x)
     if device == "cuda":
@@ -88,7 +88,7 @@ def benchmark_sequential(
     seq_pop_size = min(pop_size, 64)
     start = time.perf_counter()
     for i in range(num_iterations):
-        with strategy.perturb_population(seq_pop_size, epoch=i) as pop:
+        with strategy.perturb(seq_pop_size, epoch=i) as pop:
             outputs = []
             for member_id in range(seq_pop_size):
                 out = pop.evaluate_member(member_id, model, x)

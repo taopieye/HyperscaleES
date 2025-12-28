@@ -1,13 +1,11 @@
 """
 Triton kernels for fused EGGROLL operations.
 
-The key insight: JAX achieves 15x speedup by fusing RNG + perturbation + matmul
-into a single XLA kernel. We replicate this with Triton.
+Strategy: Two-phase approach that Triton can actually compile
+1. Generate low-rank factors A, B using vectorized Philox RNG
+2. Fused matmul: out = x @ W.T + bias + (x @ B) @ A.T
 
-Main kernel: fused_perturbed_linear
-- Computes: out = x @ W.T + sigma * (x @ B) @ A.T
-- Where A, B are generated on-the-fly from deterministic RNG
-- No intermediate tensors materialized
+This is simpler than full fusion but still eliminates most kernel launch overhead.
 """
 
 import torch
@@ -17,7 +15,7 @@ import math
 
 
 # =============================================================================
-# Philox RNG - Must match our _fold_in and _random_normal exactly
+# Philox RNG - Vectorized for Triton
 # =============================================================================
 
 @triton.jit
@@ -40,16 +38,16 @@ def philox_round(c0, c1, c2, c3, k0, k1):
 
 
 @triton.jit  
-def philox_4x32_10(key, counter):
+def philox_4x32_10_vec(key, counter):
     """
-    Philox 4x32-10 PRNG.
+    Vectorized Philox 4x32-10 PRNG.
     
     Args:
-        key: 64-bit key (will be split into two 32-bit keys)
-        counter: 64-bit counter (will be split into 4 32-bit counters)
+        key: tensor of 64-bit keys
+        counter: tensor of 64-bit counters (same shape as key)
     
     Returns:
-        4 uint32 random values
+        4 tensors of uint32 random values
     """
     PHILOX_W0: tl.constexpr = 0x9E3779B9
     PHILOX_W1: tl.constexpr = 0xBB67AE85
@@ -75,15 +73,13 @@ def philox_4x32_10(key, counter):
 
 @triton.jit
 def uint32_to_normal(u):
-    """Convert uint32 to standard normal using Box-Muller (approximate)."""
+    """Convert uint32 to standard normal using inverse CDF approximation."""
     # Convert to uniform [0, 1)
     uniform = u.to(tl.float32) * (1.0 / 4294967296.0)
     # Clamp to avoid log(0)
     uniform = tl.maximum(uniform, 1e-7)
     uniform = tl.minimum(uniform, 1.0 - 1e-7)
-    # Inverse CDF approximation (fast but less accurate than Box-Muller)
-    # Using a rational approximation to the normal quantile function
-    # For better accuracy, we'd use proper Box-Muller with pairs
+    # Inverse CDF approximation (Abramowitz & Stegun)
     t = tl.sqrt(-2.0 * tl.log(uniform))
     c0 = 2.515517
     c1 = 0.802853
@@ -97,226 +93,253 @@ def uint32_to_normal(u):
     return normal * sign
 
 
-@triton.jit
-def generate_normal_from_key(key, idx):
-    """Generate a single normal random value from key and index."""
-    c0, c1, c2, c3 = philox_4x32_10(key, idx)
-    return uint32_to_normal(c0)
-
-
 # =============================================================================
-# Fused Perturbed Linear Kernel
+# Factor Generation Kernel - Generates A and B matrices
 # =============================================================================
 
 @triton.jit
-def fused_perturbed_linear_kernel(
-    # Input/output pointers
-    x_ptr,           # [batch, in_features]
-    W_ptr,           # [out_features, in_features]
-    bias_ptr,        # [out_features] or None
-    out_ptr,         # [batch, out_features]
+def generate_factors_kernel(
+    # Output pointers
+    A_ptr,           # [batch, out_features, rank] - output matrix A
+    B_ptr,           # [batch, in_features, rank] - output matrix B
     # RNG parameters
-    base_key,        # int64: base RNG key
+    base_key,        # int64: base RNG key (scalar)
     member_ids_ptr,  # [batch]: member indices for RNG
     layer_idx,       # int: layer index for RNG
     # Perturbation parameters
     sigma,           # float: perturbation scale
-    rank,            # int: rank of low-rank perturbation
     antithetic,      # bool: whether to use antithetic sampling
     # Dimensions
     batch_size,
-    in_features,
     out_features,
-    # Strides
-    stride_x_batch, stride_x_in,
-    stride_W_out, stride_W_in,
-    stride_out_batch, stride_out_out,
+    in_features,
+    rank,
+    # Strides for A [batch, out, rank]
+    stride_A_batch, stride_A_out, stride_A_rank,
+    # Strides for B [batch, in, rank]
+    stride_B_batch, stride_B_in, stride_B_rank,
     # Block sizes
-    BLOCK_M: tl.constexpr,  # Batch block size
-    BLOCK_N: tl.constexpr,  # Output features block size
-    BLOCK_K: tl.constexpr,  # Input features block size
-    BLOCK_R: tl.constexpr,  # Rank block size (must be >= rank)
-    HAS_BIAS: tl.constexpr,
+    BLOCK_BATCH: tl.constexpr,
+    BLOCK_FEAT: tl.constexpr,
 ):
     """
-    Fused kernel computing: out = x @ W.T + bias + sigma * (x @ B) @ A.T
+    Generate low-rank factors A and B for all batch members.
     
-    Where A[out_features, rank] and B[in_features, rank] are generated on-the-fly
-    from deterministic RNG based on (base_key, member_id, layer_idx).
+    Each program generates a block of [BLOCK_BATCH, BLOCK_FEAT] values
+    for either A or B (determined by program_id).
     
-    This fuses what would otherwise be:
-    1. Generate random factors (kernel 1)
-    2. x @ B (kernel 2)
-    3. result @ A.T (kernel 3)
-    4. Scale by sigma (kernel 4)
-    5. Add to base matmul (kernel 5)
-    
-    Into a single kernel with no intermediate tensor materialization.
+    A has shape [batch, out_features, rank]
+    B has shape [batch, in_features, rank]
     """
-    # Program ID
-    pid_m = tl.program_id(0)  # Batch dimension
-    pid_n = tl.program_id(1)  # Output dimension
+    # Which matrix (0 = A, 1 = B) and which rank
+    pid_matrix = tl.program_id(0)  # 0..1 for A/B
+    pid_rank = tl.program_id(1)    # 0..rank-1
+    pid_batch = tl.program_id(2)   # batch blocks
     
-    # Compute batch and output ranges for this block
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, BLOCK_K)
-    
-    # Masks for bounds checking
-    mask_m = offs_m < batch_size
-    mask_n = offs_n < out_features
+    # Offsets
+    offs_batch = pid_batch * BLOCK_BATCH + tl.arange(0, BLOCK_BATCH)
+    mask_batch = offs_batch < batch_size
     
     # Load member IDs for this batch block
-    member_ids = tl.load(member_ids_ptr + offs_m, mask=mask_m, other=0)
+    member_ids = tl.load(member_ids_ptr + offs_batch, mask=mask_batch, other=0)
     
-    # Initialize accumulator for output
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    
-    # =========================================================================
-    # Part 1: Compute base matmul x @ W.T
-    # =========================================================================
-    for k_start in range(0, in_features, BLOCK_K):
-        k_offs = k_start + offs_k
-        mask_k = k_offs < in_features
-        
-        # Load x block: [BLOCK_M, BLOCK_K]
-        x_ptrs = x_ptr + offs_m[:, None] * stride_x_batch + k_offs[None, :] * stride_x_in
-        x_block = tl.load(x_ptrs, mask=mask_m[:, None] & mask_k[None, :], other=0.0)
-        
-        # Load W block: [BLOCK_N, BLOCK_K] (W is stored as [out, in])
-        W_ptrs = W_ptr + offs_n[:, None] * stride_W_out + k_offs[None, :] * stride_W_in
-        W_block = tl.load(W_ptrs, mask=mask_n[:, None] & mask_k[None, :], other=0.0)
-        
-        # Accumulate: [BLOCK_M, BLOCK_N] += [BLOCK_M, BLOCK_K] @ [BLOCK_K, BLOCK_N]
-        acc += tl.dot(x_block, tl.trans(W_block))
-    
-    # Add bias if present
-    if HAS_BIAS:
-        bias = tl.load(bias_ptr + offs_n, mask=mask_n, other=0.0)
-        acc += bias[None, :]
-    
-    # =========================================================================
-    # Part 2: Compute low-rank perturbation (x @ B) @ A.T
-    # This is the tricky part - we generate A, B on-the-fly per member
-    # =========================================================================
-    
-    # For each member in the batch, we need different A, B factors
-    # But they're generated from the same key pattern
-    # 
-    # The perturbation for member m is:
-    #   delta[m] = sigma * (x[m] @ B[m]) @ A[m].T
-    # 
-    # Where A[m], B[m] are generated from fold_in(fold_in(base_key, layer_idx), member_id[m])
-    
-    # We'll compute this by iterating over rank
-    # For each rank r:
-    #   1. Generate A[:, r] and B[:, r] for all members in block
-    #   2. Compute contribution to output
-    
-    # Accumulator for perturbation
-    pert_acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    
-    # Compute member keys: fold_in(fold_in(base_key, layer_idx), member_id)
-    # For antithetic: effective_member = member_id // 2, sign = 1 if even else -1
+    # Compute effective member and sign for antithetic sampling
     if antithetic:
         effective_member = member_ids // 2
         sign = tl.where(member_ids % 2 == 0, 1.0, -1.0)
     else:
         effective_member = member_ids
-        sign = tl.full((BLOCK_M,), 1.0, dtype=tl.float32)
+        sign = tl.full((BLOCK_BATCH,), 1.0, dtype=tl.float32)
     
-    # Fold in layer index to base key
-    # Using simple mixing with 32-bit constants that fit in Triton's int32
-    # We mix layer_idx into both halves of the 64-bit key
-    LAYER_MIX: tl.constexpr = 0x9E3779B9  # 32-bit golden ratio constant
-    layer_key = base_key ^ (layer_idx.to(tl.int64) * LAYER_MIX)
+    # Compute member keys using 32-bit mixing constants
+    LAYER_MIX: tl.constexpr = 0x9E3779B9
+    MEMBER_MIX: tl.constexpr = 0xBB67AE85
     
-    # Member keys: one per batch element
-    # member_key[m] = layer_key ^ (effective_member[m] * another_prime)
-    MEMBER_MIX: tl.constexpr = 0xBB67AE85  # 32-bit mixing constant
+    layer_key = base_key ^ (layer_idx * LAYER_MIX)
     member_keys = layer_key ^ (effective_member.to(tl.int64) * MEMBER_MIX)
     
-    # Scale factor for low-rank (matches JAX: sigma / sqrt(rank))
-    scale = sigma / tl.sqrt(rank.to(tl.float32)) * sign
+    # Scale for A (includes sigma/sqrt(rank) and sign)
+    # Cast rank to float using float() since it's a Python int
+    rank_float = float(rank)
+    scale_A = sigma / tl.sqrt(rank_float) * sign
     
-    # For simplicity in this first version, we compute the full perturbation
-    # by generating factors and doing the matmul explicitly
-    # A more optimized version would interleave this with the base matmul
+    # Current rank index
+    r = pid_rank
+    
+    if pid_matrix == 0:
+        # Generate A factors [batch, out_features, rank]
+        # Process out_features in blocks
+        num_feat_blocks = tl.cdiv(out_features, BLOCK_FEAT)
+        for feat_block in range(num_feat_blocks):
+            offs_feat = feat_block * BLOCK_FEAT + tl.arange(0, BLOCK_FEAT)
+            mask_feat = offs_feat < out_features
+            
+            # RNG counter: feature_idx + r * out_features
+            # Shape: [BLOCK_BATCH, BLOCK_FEAT]
+            counter = offs_feat[None, :].to(tl.int64) + r * out_features
+            
+            # Broadcast member_keys to [BLOCK_BATCH, BLOCK_FEAT]
+            keys = member_keys[:, None] + tl.zeros((1, BLOCK_FEAT), dtype=tl.int64)
+            counters = tl.zeros((BLOCK_BATCH, 1), dtype=tl.int64) + counter
+            
+            # Generate random values
+            c0, _, _, _ = philox_4x32_10_vec(keys, counters)
+            vals = uint32_to_normal(c0) * scale_A[:, None]
+            
+            # Store to A[batch, feat, r]
+            A_ptrs = (A_ptr + 
+                     offs_batch[:, None] * stride_A_batch + 
+                     offs_feat[None, :] * stride_A_out + 
+                     r * stride_A_rank)
+            tl.store(A_ptrs, vals, mask=mask_batch[:, None] & mask_feat[None, :])
+    
+    else:
+        # Generate B factors [batch, in_features, rank]
+        num_feat_blocks = tl.cdiv(in_features, BLOCK_FEAT)
+        for feat_block in range(num_feat_blocks):
+            offs_feat = feat_block * BLOCK_FEAT + tl.arange(0, BLOCK_FEAT)
+            mask_feat = offs_feat < in_features
+            
+            # RNG counter: out_features + feature_idx + r * in_features
+            # (offset by out_features to separate from A's random stream)
+            counter = (out_features + offs_feat[None, :]).to(tl.int64) + r * in_features
+            
+            # Broadcast member_keys
+            keys = member_keys[:, None] + tl.zeros((1, BLOCK_FEAT), dtype=tl.int64)
+            counters = tl.zeros((BLOCK_BATCH, 1), dtype=tl.int64) + counter
+            
+            # Generate random values (B doesn't get sigma scaling)
+            c0, _, _, _ = philox_4x32_10_vec(keys, counters)
+            vals = uint32_to_normal(c0)
+            
+            # Store to B[batch, feat, r]
+            B_ptrs = (B_ptr + 
+                     offs_batch[:, None] * stride_B_batch + 
+                     offs_feat[None, :] * stride_B_in + 
+                     r * stride_B_rank)
+            tl.store(B_ptrs, vals, mask=mask_batch[:, None] & mask_feat[None, :])
+
+
+# =============================================================================
+# Fused Matmul Kernel - Computes x @ W.T + bias + (x @ B) @ A.T
+# =============================================================================
+
+@triton.jit
+def fused_perturbed_matmul_kernel(
+    # Input pointers
+    x_ptr,           # [batch, in_features]
+    W_ptr,           # [out_features, in_features]
+    bias_ptr,        # [out_features] or None
+    A_ptr,           # [batch, out_features, rank]
+    B_ptr,           # [batch, in_features, rank]
+    out_ptr,         # [batch, out_features]
+    # Dimensions
+    batch_size,
+    in_features,
+    out_features,
+    rank,
+    # Strides
+    stride_x_batch, stride_x_in,
+    stride_W_out, stride_W_in,
+    stride_A_batch, stride_A_out, stride_A_rank,
+    stride_B_batch, stride_B_in, stride_B_rank,
+    stride_out_batch, stride_out_out,
+    # Block sizes
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    HAS_BIAS: tl.constexpr,
+):
+    """
+    Fused kernel: out = x @ W.T + bias + (x @ B) @ A.T
+    
+    This computes the base linear layer plus the low-rank perturbation
+    in a single kernel pass.
+    """
+    pid_m = tl.program_id(0)  # Batch
+    pid_n = tl.program_id(1)  # Output features
+    
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+    
+    mask_m = offs_m < batch_size
+    mask_n = offs_n < out_features
+    
+    # Accumulator for output
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    
+    # Part 1: x @ W.T
+    for k_start in range(0, in_features, BLOCK_K):
+        k_offs = k_start + offs_k
+        mask_k = k_offs < in_features
+        
+        # Load x [BLOCK_M, BLOCK_K]
+        x_ptrs = x_ptr + offs_m[:, None] * stride_x_batch + k_offs[None, :] * stride_x_in
+        x_block = tl.load(x_ptrs, mask=mask_m[:, None] & mask_k[None, :], other=0.0)
+        
+        # Load W [BLOCK_N, BLOCK_K]
+        W_ptrs = W_ptr + offs_n[:, None] * stride_W_out + k_offs[None, :] * stride_W_in
+        W_block = tl.load(W_ptrs, mask=mask_n[:, None] & mask_k[None, :], other=0.0)
+        
+        # acc += x @ W.T
+        acc += tl.dot(x_block, tl.trans(W_block))
+    
+    # Add bias
+    if HAS_BIAS:
+        bias = tl.load(bias_ptr + offs_n, mask=mask_n, other=0.0)
+        acc += bias[None, :]
+    
+    # Part 2: (x @ B) @ A.T
+    # For each batch element, compute:
+    #   temp[r] = sum_k(x[k] * B[k, r])  shape: [BLOCK_M, rank]
+    #   pert[n] = sum_r(temp[r] * A[n, r])  shape: [BLOCK_M, BLOCK_N]
+    
+    # We iterate over rank since it's typically small (1-16)
+    pert = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     
     for r in range(rank):
-        # Generate B[:, r] for all members and compute x @ B[:, r]
-        # B has shape [in_features] per member
+        # Compute x @ B[:, r] for this rank
         xB = tl.zeros((BLOCK_M,), dtype=tl.float32)
         
         for k_start in range(0, in_features, BLOCK_K):
             k_offs = k_start + offs_k
             mask_k = k_offs < in_features
             
-            # Load x block
+            # Load x [BLOCK_M, BLOCK_K]
             x_ptrs = x_ptr + offs_m[:, None] * stride_x_batch + k_offs[None, :] * stride_x_in
             x_block = tl.load(x_ptrs, mask=mask_m[:, None] & mask_k[None, :], other=0.0)
             
-            # Generate B values for this k range
-            # B[m, k, r] = normal(member_keys[m], k + r * in_features)
-            # We need to generate per-member, per-k values
-            for ki in range(BLOCK_K):
-                k_idx = k_start + ki
-                if k_idx < in_features:
-                    # RNG index for B: offset by out_features to separate from A
-                    rng_idx_B = (out_features + k_idx + r * in_features).to(tl.int64)
-                    
-                    # Generate B values for all members in block
-                    B_vals = tl.zeros((BLOCK_M,), dtype=tl.float32)
-                    for mi in range(BLOCK_M):
-                        if mi < batch_size:
-                            mk = tl.load(member_keys + mi)
-                            c0, c1, c2, c3 = philox_4x32_10(mk, rng_idx_B)
-                            B_vals = tl.where(tl.arange(0, BLOCK_M) == mi, 
-                                            uint32_to_normal(c0), B_vals)
-                    
-                    # Accumulate x[:, k] * B[:, k]
-                    xB += x_block[:, ki] * B_vals
-        
-        # Now compute (xB) @ A[:, r].T = xB[:, None] * A[None, :]
-        # Generate A[:, r] and multiply
-        for n_start in range(0, out_features, BLOCK_N):
-            n_offs_local = n_start + tl.arange(0, BLOCK_N)
-            mask_n_local = n_offs_local < out_features
+            # Load B[:, :, r] for this batch [BLOCK_M, BLOCK_K]
+            B_ptrs = (B_ptr + 
+                     offs_m[:, None] * stride_B_batch + 
+                     k_offs[None, :] * stride_B_in + 
+                     r * stride_B_rank)
+            B_block = tl.load(B_ptrs, mask=mask_m[:, None] & mask_k[None, :], other=0.0)
             
-            # Only process our block
-            if n_start == pid_n * BLOCK_N:
-                for ni in range(BLOCK_N):
-                    n_idx = pid_n * BLOCK_N + ni
-                    if n_idx < out_features:
-                        # RNG index for A
-                        rng_idx_A = (n_idx + r * out_features).to(tl.int64)
-                        
-                        # Generate A values for all members
-                        A_vals = tl.zeros((BLOCK_M,), dtype=tl.float32)
-                        for mi in range(BLOCK_M):
-                            if mi < batch_size:
-                                mk = tl.load(member_keys + mi)
-                                c0, c1, c2, c3 = philox_4x32_10(mk, rng_idx_A)
-                                A_vals = tl.where(tl.arange(0, BLOCK_M) == mi,
-                                                uint32_to_normal(c0), A_vals)
-                        
-                        # Accumulate: pert_acc[:, ni] += xB * A_vals * scale
-                        pert_acc = tl.where(
-                            tl.arange(0, BLOCK_N)[None, :] == ni,
-                            pert_acc + (xB * A_vals * scale)[:, None],
-                            pert_acc
-                        )
+            # xB += sum over k (x * B)
+            xB += tl.sum(x_block * B_block, axis=1)
+        
+        # Load A[:, :, r] for output features [BLOCK_M, BLOCK_N]
+        A_ptrs = (A_ptr + 
+                 offs_m[:, None] * stride_A_batch + 
+                 offs_n[None, :] * stride_A_out + 
+                 r * stride_A_rank)
+        A_block = tl.load(A_ptrs, mask=mask_m[:, None] & mask_n[None, :], other=0.0)
+        
+        # pert += xB[:, None] * A
+        pert += xB[:, None] * A_block
     
-    # Combine base and perturbation
-    out = acc + pert_acc
+    # Combine
+    out = acc + pert
     
-    # Store output
+    # Store
     out_ptrs = out_ptr + offs_m[:, None] * stride_out_batch + offs_n[None, :] * stride_out_out
     tl.store(out_ptrs, out, mask=mask_m[:, None] & mask_n[None, :])
 
 
 # =============================================================================
-# Python Wrapper
+# Python Wrapper - Main API
 # =============================================================================
 
 def fused_perturbed_linear(
@@ -333,7 +356,12 @@ def fused_perturbed_linear(
     """
     Fused perturbed linear layer: out = x @ W.T + bias + perturbation
     
-    Equivalent to EggRoll.do_mm but in a single fused kernel.
+    Two-phase approach:
+    1. Generate A, B factors using Triton RNG kernel
+    2. Compute fused matmul x @ W.T + bias + (x @ B) @ A.T
+    
+    This eliminates most kernel launch overhead while being simpler
+    than full fusion.
     """
     assert x.is_cuda and weight.is_cuda
     assert x.ndim == 2 and weight.ndim == 2
@@ -342,35 +370,62 @@ def fused_perturbed_linear(
     out_features, in_features_w = weight.shape
     assert in_features == in_features_w
     
-    # Ensure member_ids is on same device
+    device = x.device
+    dtype = x.dtype
+    
+    # Ensure member_ids is on correct device and is int64
     if not member_ids.is_cuda:
-        member_ids = member_ids.to(x.device)
+        member_ids = member_ids.to(device)
+    member_ids = member_ids.to(torch.int64)
     
-    # Output tensor
-    out = torch.empty((batch_size, out_features), device=x.device, dtype=x.dtype)
+    # Allocate factor tensors
+    A = torch.empty((batch_size, out_features, rank), device=device, dtype=dtype)
+    B = torch.empty((batch_size, in_features, rank), device=device, dtype=dtype)
     
-    # Block sizes (tuned for typical GPU)
+    # Phase 1: Generate factors
+    BLOCK_BATCH = 32
+    BLOCK_FEAT = 128
+    
+    grid_factors = (
+        2,  # A and B
+        rank,  # one program per rank
+        triton.cdiv(batch_size, BLOCK_BATCH),
+    )
+    
+    generate_factors_kernel[grid_factors](
+        A, B,
+        base_key, member_ids, layer_idx,
+        sigma, antithetic,
+        batch_size, out_features, in_features, rank,
+        A.stride(0), A.stride(1), A.stride(2),
+        B.stride(0), B.stride(1), B.stride(2),
+        BLOCK_BATCH=BLOCK_BATCH,
+        BLOCK_FEAT=BLOCK_FEAT,
+    )
+    
+    # Phase 2: Fused matmul
+    out = torch.empty((batch_size, out_features), device=device, dtype=dtype)
+    
     BLOCK_M = 32
     BLOCK_N = 64
     BLOCK_K = 64
-    BLOCK_R = max(rank, 4)
     
-    # Grid
-    grid = (triton.cdiv(batch_size, BLOCK_M), triton.cdiv(out_features, BLOCK_N))
+    grid_matmul = (
+        triton.cdiv(batch_size, BLOCK_M),
+        triton.cdiv(out_features, BLOCK_N),
+    )
     
-    # Launch kernel
-    fused_perturbed_linear_kernel[grid](
-        x, weight, bias, out,
-        base_key, member_ids, layer_idx,
-        sigma, rank, antithetic,
-        batch_size, in_features, out_features,
+    fused_perturbed_matmul_kernel[grid_matmul](
+        x, weight, bias, A, B, out,
+        batch_size, in_features, out_features, rank,
         x.stride(0), x.stride(1),
         weight.stride(0), weight.stride(1),
+        A.stride(0), A.stride(1), A.stride(2),
+        B.stride(0), B.stride(1), B.stride(2),
         out.stride(0), out.stride(1),
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
-        BLOCK_R=BLOCK_R,
         HAS_BIAS=bias is not None,
     )
     
@@ -378,74 +433,62 @@ def fused_perturbed_linear(
 
 
 # =============================================================================
-# Simpler V2: Generate factors first, then fused matmul
-# This is easier to verify correct and still much faster than naive
+# Pure PyTorch Reference Implementation (for testing)
 # =============================================================================
 
-@triton.jit
-def generate_lowrank_factors_kernel(
-    A_ptr,           # [batch, out_features, rank]
-    B_ptr,           # [batch, in_features, rank]
-    base_key,
-    member_ids_ptr,  # [batch]
-    layer_idx,
-    sigma,
-    rank,
-    antithetic,
-    batch_size,
-    out_features,
-    in_features,
-    BLOCK_B: tl.constexpr,
-    BLOCK_F: tl.constexpr,
-):
-    """Generate low-rank factors A, B for all batch members."""
-    pid_b = tl.program_id(0)  # Batch
-    pid_f = tl.program_id(1)  # Feature (covers both A and B)
+def pytorch_perturbed_linear_reference(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor | None,
+    base_key: int,
+    member_ids: torch.Tensor,
+    layer_idx: int,
+    sigma: float,
+    rank: int,
+    antithetic: bool = True,
+) -> torch.Tensor:
+    """
+    Pure PyTorch reference implementation for testing.
     
-    offs_b = pid_b * BLOCK_B + tl.arange(0, BLOCK_B)
-    offs_f = pid_f * BLOCK_F + tl.arange(0, BLOCK_F)
+    This uses the same RNG logic but implemented in PyTorch.
+    """
+    batch_size, in_features = x.shape
+    out_features = weight.shape[0]
+    device = x.device
+    dtype = x.dtype
     
-    mask_b = offs_b < batch_size
+    # Base linear
+    out = torch.nn.functional.linear(x, weight, bias)
     
-    # Load member IDs
-    member_ids = tl.load(member_ids_ptr + offs_b, mask=mask_b, other=0)
+    # Generate factors using PyTorch
+    # For testing, we use torch's RNG seeded deterministically
+    A = torch.empty((batch_size, out_features, rank), device=device, dtype=dtype)
+    B = torch.empty((batch_size, in_features, rank), device=device, dtype=dtype)
     
-    # Compute member keys
-    if antithetic:
-        effective_member = member_ids // 2
-        sign = tl.where(member_ids % 2 == 0, 1.0, -1.0)
-    else:
-        effective_member = member_ids
-        sign = tl.full((BLOCK_B,), 1.0, dtype=tl.float32)
+    for i in range(batch_size):
+        member_id = member_ids[i].item()
+        if antithetic:
+            effective_member = member_id // 2
+            sign = 1.0 if member_id % 2 == 0 else -1.0
+        else:
+            effective_member = member_id
+            sign = 1.0
+        
+        # Deterministic seed from key, layer, member
+        seed = base_key ^ (layer_idx * 0x9E3779B9) ^ (effective_member * 0xBB67AE85)
+        seed = seed & 0x7FFFFFFF  # Ensure positive for PyTorch
+        
+        gen = torch.Generator(device=device)
+        gen.manual_seed(seed)
+        
+        # Generate A and B
+        scale = sigma / math.sqrt(rank) * sign
+        A[i] = torch.randn(out_features, rank, generator=gen, device=device, dtype=dtype) * scale
+        B[i] = torch.randn(in_features, rank, generator=gen, device=device, dtype=dtype)
     
-    layer_key = base_key ^ (layer_idx.to(tl.int64) * 0x9E3779B9)
-    member_keys = layer_key ^ (effective_member.to(tl.int64) * 0xBB67AE85)
+    # Perturbation: (x @ B) @ A.T
+    # x: [batch, in], B: [batch, in, rank], A: [batch, out, rank]
+    xB = torch.einsum('bi,bir->br', x, B)  # [batch, rank]
+    pert = torch.einsum('br,bor->bo', xB, A)  # [batch, out]
     
-    scale = sigma / tl.sqrt(rank.to(tl.float32))
-    
-    # Generate factors for each rank
-    for r in range(rank):
-        for fi in range(BLOCK_F):
-            f_idx = pid_f * BLOCK_F + fi
-            
-            # Generate A factors (if f_idx < out_features)
-            if f_idx < out_features:
-                rng_idx = (f_idx + r * out_features).to(tl.int64)
-                for bi in range(BLOCK_B):
-                    if offs_b[bi] < batch_size:
-                        mk = tl.load(member_keys + bi)
-                        c0, _, _, _ = philox_4x32_10(mk, rng_idx)
-                        val = uint32_to_normal(c0) * scale * tl.load(sign + bi)
-                        A_idx = offs_b[bi] * out_features * rank + f_idx * rank + r
-                        tl.store(A_ptr + A_idx, val)
-            
-            # Generate B factors (if f_idx < in_features)
-            if f_idx < in_features:
-                rng_idx = (out_features + f_idx + r * in_features).to(tl.int64)
-                for bi in range(BLOCK_B):
-                    if offs_b[bi] < batch_size:
-                        mk = tl.load(member_keys + bi)
-                        c0, _, _, _ = philox_4x32_10(mk, rng_idx)
-                        val = uint32_to_normal(c0)  # B doesn't get scaled by sigma
-                        B_idx = offs_b[bi] * in_features * rank + f_idx * rank + r
-                        tl.store(B_ptr + B_idx, val)
+    return out + pert

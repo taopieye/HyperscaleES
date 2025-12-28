@@ -49,8 +49,9 @@ def philox_4x32_10_vec(key, counter):
     Returns:
         4 tensors of uint32 random values
     """
-    PHILOX_W0: tl.constexpr = 0x9E3779B9
-    PHILOX_W1: tl.constexpr = 0xBB67AE85
+    # Use smaller primes that fit in signed int32 (max 2147483647)
+    PHILOX_W0: tl.constexpr = 0x7E3779B9  # 2117232569 - fits in int32
+    PHILOX_W1: tl.constexpr = 0x3B67AE85  # 996876933 - fits in int32
     
     # Split key into two 32-bit values
     k0 = (key & 0xFFFFFFFF).to(tl.uint32)
@@ -151,9 +152,9 @@ def generate_factors_kernel(
         effective_member = member_ids
         sign = tl.full((BLOCK_BATCH,), 1.0, dtype=tl.float32)
     
-    # Compute member keys using 32-bit mixing constants
-    LAYER_MIX: tl.constexpr = 0x9E3779B9
-    MEMBER_MIX: tl.constexpr = 0xBB67AE85
+    # Compute member keys using mixing constants that fit in signed int32
+    LAYER_MIX: tl.constexpr = 0x7E3779B9  # 2117232569
+    MEMBER_MIX: tl.constexpr = 0x3B67AE85  # 996876933
     
     layer_key = base_key ^ (layer_idx * LAYER_MIX)
     member_keys = layer_key ^ (effective_member.to(tl.int64) * MEMBER_MIX)

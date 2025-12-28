@@ -39,8 +39,18 @@ class TestPhiloxRNG:
     
     def test_philox_determinism(self):
         """Same key + counter should give same output."""
-        # Tested indirectly through the kernel determinism tests
-        pass
+        from hyperscalees.torch.strategy import _random_normal_batched
+        
+        device = torch.device('cuda')
+        keys = torch.tensor([42, 123, 456], dtype=torch.int64, device=device)
+        shape = (100,)
+        
+        # Generate samples twice with same keys
+        samples1 = _random_normal_batched(keys, shape, torch.float32, device)
+        samples2 = _random_normal_batched(keys, shape, torch.float32, device)
+        
+        # Should be identical
+        assert torch.allclose(samples1, samples2), "Same keys should produce identical outputs"
     
     def test_normal_distribution_statistics(self):
         """Generated normals should have ~N(0,1) statistics."""

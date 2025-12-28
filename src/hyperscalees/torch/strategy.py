@@ -890,9 +890,16 @@ class EggrollStrategy(BaseStrategy):
         param_names = {id(p): n for n, p in model.named_parameters()}
         
         # Compute combined seeds for each member (vectorized)
-        # These will be used to generate deterministic random numbers
-        base_seed_component = self._seed * 0x9E3779B97F4A7C15 + effective_epoch * 0x85EBCA6B
-        member_seed_component = effective_member_ids.to(torch.int64) * 0xBF58476D1CE4E5B9
+        # Keep all computation in tensor space to avoid overflow
+        # Use smaller mixing constants that fit in int64
+        SEED_MIX = 2654435761  # 0x9E3779B1 (32-bit golden ratio hash)
+        EPOCH_MIX = 2246822519  # 0x85EBCA77 (mix constant)
+        MEMBER_MIX = 3266489917  # 0xC2B2AE3D (mix constant)
+        
+        base_seed = (self._seed % (2**31)) * SEED_MIX + (effective_epoch % (2**31)) * EPOCH_MIX
+        base_seed = base_seed % (2**62)  # Keep in int64 range
+        base_seed_tensor = torch.tensor(base_seed, dtype=torch.int64, device=x.device)
+        member_seed_component = (effective_member_ids.to(torch.int64) * MEMBER_MIX) % (2**62)
         
         # Process each layer
         layer_idx = 0
@@ -915,9 +922,11 @@ class EggrollStrategy(BaseStrategy):
                 
                 # Get parameter-specific key
                 param_key = self._param_keys.get(param_name, hash(param_name) % 10000)
+                LAYER_MIX = 2496928179  # 0x94D049B3
                 
                 # Compute per-member seeds for this layer
-                layer_seeds = (base_seed_component + member_seed_component + param_key * 0x94D049BB133111EB) % (2**62)
+                # All operations in tensor space
+                layer_seeds = (base_seed_tensor + member_seed_component + param_key * LAYER_MIX) % (2**62)
                 
                 # Generate random factors on-the-fly using hash-based RNG
                 # Shape: (batch_size, m_out + n_in, r)
@@ -932,14 +941,23 @@ class EggrollStrategy(BaseStrategy):
                 seeds_expanded = layer_seeds.unsqueeze(-1)  # (batch_size, 1)
                 counters_expanded = counters.unsqueeze(0)   # (1, numel)
                 
-                # Mix seeds with counters (SplitMix64-style)
+                # Mix seeds with counters (hash-based RNG)
+                # Using smaller constants that fit in int64 when combined with tensor ops
+                MIX_A = 0xBF58476D  # 32-bit constant
+                MIX_B = 0x94D049B3  # 32-bit constant
+                
                 mixed = seeds_expanded + counters_expanded
-                mixed = (mixed ^ (mixed >> 30)) * 0xBF58476D1CE4E5B9
-                mixed = (mixed ^ (mixed >> 27)) * 0x94D049BB133111EB  
-                mixed = mixed ^ (mixed >> 31)
+                # Keep values in reasonable range
+                mixed = mixed % (2**62)
+                mixed = ((mixed >> 30) ^ mixed) % (2**62)
+                mixed = (mixed * MIX_A) % (2**62)
+                mixed = ((mixed >> 27) ^ mixed) % (2**62)
+                mixed = (mixed * MIX_B) % (2**62)
+                mixed = (mixed >> 31) ^ mixed
                 
                 # Convert to uniform [0, 1)
-                uniform = ((mixed & 0x7FFFFFFFFFFFFFFF).float() / (2**63)).to(x.dtype)
+                # Using 2**62 since we've kept values in that range
+                uniform = (mixed.abs().float() / (2.0**62)).to(x.dtype)
                 
                 # Box-Muller transform for normal distribution
                 # Reshape to pairs: (batch_size, numel/2, 2)

@@ -31,11 +31,11 @@ import math
 # - Deterministic: same (key, counter) always produces same output  
 # - No global state or synchronization needed
 
-PHILOX_ROUNDS: tl.constexpr = 10
-PHILOX_W0: tl.constexpr = 0x9E3779B9
-PHILOX_W1: tl.constexpr = 0xBB67AE85
-PHILOX_M0: tl.constexpr = 0xD2511F53
-PHILOX_M1: tl.constexpr = 0xCD9E8D57
+PHILOX_ROUNDS = tl.constexpr(10)
+PHILOX_W0 = tl.constexpr(0x9E3779B9)
+PHILOX_W1 = tl.constexpr(0xBB67AE85)
+PHILOX_M0 = tl.constexpr(0xD2511F53)
+PHILOX_M1 = tl.constexpr(0xCD9E8D57)
 
 
 @triton.jit

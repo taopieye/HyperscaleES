@@ -251,16 +251,20 @@ def benchmark_torch(config: BenchmarkConfig, population_size: int) -> BenchmarkR
 
 
 def run_benchmarks(config: BenchmarkConfig, frameworks: List[str]) -> List[BenchmarkResult]:
-    """Run all benchmarks."""
+    """Run all benchmarks.
+    
+    Note: We run all pop sizes for each framework separately to avoid
+    JAX/PyTorch GPU context switching overhead which can cause measurement noise.
+    """
     results = []
     
-    for pop_size in config.population_sizes:
-        print(f"\n{'='*60}")
-        print(f"Population Size: {pop_size}")
-        print('='*60)
-        
-        if "jax" in frameworks and HAS_JAX:
-            print(f"  Running JAX benchmark...")
+    # Run all JAX benchmarks first (to avoid JAX/PyTorch interference)
+    if "jax" in frameworks and HAS_JAX:
+        print("\n" + "="*60)
+        print("Running JAX benchmarks...")
+        print("="*60)
+        for pop_size in config.population_sizes:
+            print(f"\n  Population Size: {pop_size}")
             try:
                 result = benchmark_jax(config, pop_size)
                 results.append(result)
@@ -268,9 +272,18 @@ def run_benchmarks(config: BenchmarkConfig, frameworks: List[str]) -> List[Bench
                 print(f"    Throughput: {result.throughput_samples_per_sec:.1f} samples/sec")
             except Exception as e:
                 print(f"    JAX benchmark failed: {e}")
-        
-        if "torch" in frameworks and HAS_TORCH:
-            print(f"  Running PyTorch benchmark...")
+    
+    # Then run all PyTorch benchmarks
+    if "torch" in frameworks and HAS_TORCH:
+        print("\n" + "="*60)
+        print("Running PyTorch benchmarks...")
+        print("="*60)
+        # Clear any JAX memory before PyTorch runs
+        if HAS_JAX:
+            import gc
+            gc.collect()
+        for pop_size in config.population_sizes:
+            print(f"\n  Population Size: {pop_size}")
             try:
                 result = benchmark_torch(config, pop_size)
                 results.append(result)

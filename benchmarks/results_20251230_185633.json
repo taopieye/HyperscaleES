@@ -1,0 +1,439 @@
+{
+  "timestamp": "2025-12-30 18:56:33",
+  "results": [
+    {
+      "framework": "JAX",
+      "population_size": 32,
+      "mean_time_ms": 1.2924872036091983,
+      "std_time_ms": 0.20787320899584577,
+      "min_time_ms": 1.1608109343796968,
+      "max_time_ms": 2.284738002344966,
+      "throughput_samples_per_sec": 24758.4656239859,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "PyTorch",
+      "population_size": 32,
+      "mean_time_ms": 1.4314886322245002,
+      "std_time_ms": 0.4552780946458173,
+      "min_time_ms": 1.1010699672624469,
+      "max_time_ms": 2.945986925624311,
+      "throughput_samples_per_sec": 22354.35146297511,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "JAX",
+      "population_size": 64,
+      "mean_time_ms": 1.5868557780049741,
+      "std_time_ms": 0.7260924385905697,
+      "min_time_ms": 1.1273869313299656,
+      "max_time_ms": 3.7397840060293674,
+      "throughput_samples_per_sec": 40331.327450855075,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "PyTorch",
+      "population_size": 64,
+      "mean_time_ms": 2.2825840511359274,
+      "std_time_ms": 1.2533482142900725,
+      "min_time_ms": 1.5530750388279557,
+      "max_time_ms": 6.37666299007833,
+      "throughput_samples_per_sec": 28038.397958730333,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "JAX",
+      "population_size": 128,
+      "mean_time_ms": 2.6895161578431726,
+      "std_time_ms": 0.9989789324112682,
+      "min_time_ms": 1.269252970814705,
+      "max_time_ms": 6.947541958652437,
+      "throughput_samples_per_sec": 47592.20338822882,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "PyTorch",
+      "population_size": 128,
+      "mean_time_ms": 3.8568387902341783,
+      "std_time_ms": 1.8326519258089873,
+      "min_time_ms": 2.3327070521190763,
+      "max_time_ms": 9.193537989631295,
+      "throughput_samples_per_sec": 33187.80145130933,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "JAX",
+      "population_size": 256,
+      "mean_time_ms": 2.7729170746169984,
+      "std_time_ms": 1.2330341787168162,
+      "min_time_ms": 1.4626190531998873,
+      "max_time_ms": 7.701174006797373,
+      "throughput_samples_per_sec": 92321.54915247846,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "PyTorch",
+      "population_size": 256,
+      "mean_time_ms": 2.6609544060193002,
+      "std_time_ms": 2.7622044137725412,
+      "min_time_ms": 1.0883871000260115,
+      "max_time_ms": 10.418439982458949,
+      "throughput_samples_per_sec": 96206.08283287632,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "JAX",
+      "population_size": 512,
+      "mean_time_ms": 1.2849968392401934,
+      "std_time_ms": 0.31601624065827544,
+      "min_time_ms": 1.1325969826430082,
+      "max_time_ms": 2.4587189545854926,
+      "throughput_samples_per_sec": 398444.55983466917,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "PyTorch",
+      "population_size": 512,
+      "mean_time_ms": 4.821544522419572,
+      "std_time_ms": 2.9131084250121844,
+      "min_time_ms": 1.1552289361134171,
+      "max_time_ms": 9.103949065320194,
+      "throughput_samples_per_sec": 106190.03881832155,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "JAX",
+      "population_size": 1024,
+      "mean_time_ms": 2.434897238854319,
+      "std_time_ms": 0.17888187322316967,
+      "min_time_ms": 2.266017021611333,
+      "max_time_ms": 3.586185979656875,
+      "throughput_samples_per_sec": 420551.6288982356,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "PyTorch",
+      "population_size": 1024,
+      "mean_time_ms": 3.4402239113114774,
+      "std_time_ms": 0.8562349298018007,
+      "min_time_ms": 2.777115092612803,
+      "max_time_ms": 8.306820993311703,
+      "throughput_samples_per_sec": 297655.0440897413,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "JAX",
+      "population_size": 2048,
+      "mean_time_ms": 3.3950160513632,
+      "std_time_ms": 0.6578152289004164,
+      "min_time_ms": 2.282461035065353,
+      "max_time_ms": 4.640322993509471,
+      "throughput_samples_per_sec": 603237.2068396163,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    },
+    {
+      "framework": "PyTorch",
+      "population_size": 2048,
+      "mean_time_ms": 4.465980879031122,
+      "std_time_ms": 1.3612862381547135,
+      "min_time_ms": 3.428419935517013,
+      "max_time_ms": 7.872962043620646,
+      "throughput_samples_per_sec": 458577.8702313446,
+      "total_params": 6291456,
+      "config": {
+        "population_sizes": [
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048
+        ],
+        "input_dim": 512,
+        "hidden_dim": 2048,
+        "output_dim": 512,
+        "batch_size": 1,
+        "rank": 4,
+        "sigma": 0.1,
+        "seed": 42,
+        "warmup_iters": 10,
+        "bench_iters": 50,
+        "num_layers": 3
+      }
+    }
+  ]
+}

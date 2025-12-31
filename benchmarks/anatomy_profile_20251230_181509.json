@@ -1,0 +1,164 @@
+{
+  "config": {
+    "pop_size": 2048,
+    "layer_size": 256,
+    "n_layers": 3,
+    "rank": 4,
+    "num_iterations": 200,
+    "output_dir": "benchmarks"
+  },
+  "anatomy": {
+    "1_noise_generation": {
+      "name": "Noise Generation (torch.randn)",
+      "total_time_ms": 4.893503998406231,
+      "num_calls": 200,
+      "mean_time_ms": 0.02446751999203116,
+      "std_time_ms": 0.020829781664619743,
+      "min_time_ms": 0.007327999919652939,
+      "max_time_ms": 0.2181120067834854,
+      "percentage": 1.732027024606678
+    },
+    "2_antithetic_expand": {
+      "name": "Antithetic Expansion (repeat_interleave)",
+      "total_time_ms": 11.06940795108676,
+      "num_calls": 200,
+      "mean_time_ms": 0.0553470397554338,
+      "std_time_ms": 0.023731797983809137,
+      "min_time_ms": 0.008191999979317188,
+      "max_time_ms": 0.1475519984960556,
+      "percentage": 3.9179519877622684
+    },
+    "3_factor_split_scale": {
+      "name": "Factor Split + Sigma Scaling",
+      "total_time_ms": 5.349152024835348,
+      "num_calls": 200,
+      "mean_time_ms": 0.026745760124176742,
+      "std_time_ms": 0.00462260314111473,
+      "min_time_ms": 0.016383999958634377,
+      "max_time_ms": 0.05100800096988678,
+      "percentage": 1.8933009697676428
+    },
+    "4_base_linear": {
+      "name": "Base Linear (F.linear)",
+      "total_time_ms": 14.353760106489062,
+      "num_calls": 200,
+      "mean_time_ms": 0.07176880053244532,
+      "std_time_ms": 0.017265691472361865,
+      "min_time_ms": 0.01740800030529499,
+      "max_time_ms": 0.2539519965648651,
+      "percentage": 5.080429160220838
+    },
+    "5_lowrank_perturbation": {
+      "name": "Low-Rank Perturbation (bmm)",
+      "total_time_ms": 19.795679923146963,
+      "num_calls": 200,
+      "mean_time_ms": 0.09897839961573482,
+      "std_time_ms": 0.03671040846927058,
+      "min_time_ms": 0.02457600086927414,
+      "max_time_ms": 0.40038400888442993,
+      "percentage": 7.0065647455322875
+    },
+    "6_perturbed_linear_combined": {
+      "name": "Combined Perturbed Linear",
+      "total_time_ms": 34.71910408884287,
+      "num_calls": 200,
+      "mean_time_ms": 0.17359552044421434,
+      "std_time_ms": 0.047445546578248086,
+      "min_time_ms": 0.06656000018119812,
+      "max_time_ms": 0.40959998965263367,
+      "percentage": 12.288623156656923
+    },
+    "7_full_forward_pass": {
+      "name": "Full Forward Pass (all layers)",
+      "total_time_ms": 282.53046452999115,
+      "num_calls": 200,
+      "mean_time_ms": 1.4126523226499557,
+      "std_time_ms": 0.39187730711639274,
+      "min_time_ms": 1.1079679727554321,
+      "max_time_ms": 2.8149759769439697,
+      "percentage": 100.0
+    },
+    "8_activation_tanh": {
+      "name": "Activation (Tanh)",
+      "total_time_ms": 6.346080034971237,
+      "num_calls": 200,
+      "mean_time_ms": 0.031730400174856184,
+      "std_time_ms": 0.030251584759336876,
+      "min_time_ms": 0.004095999989658594,
+      "max_time_ms": 0.3112959861755371,
+      "percentage": 2.246157788870088
+    }
+  },
+  "optimizations": {
+    "current_two_bmm": {
+      "name": "Current: Two bmm calls",
+      "total_time_ms": 18.425183847546577,
+      "num_calls": 200,
+      "mean_time_ms": 0.09212591923773289,
+      "std_time_ms": 0.034905740937495135,
+      "min_time_ms": 0.026623999699950218,
+      "max_time_ms": 0.392192006111145,
+      "percentage": 0.0
+    },
+    "alt_einsum": {
+      "name": "Alternative: einsum",
+      "total_time_ms": 32.11638380587101,
+      "num_calls": 200,
+      "mean_time_ms": 0.16058191902935504,
+      "std_time_ms": 0.06408345885299675,
+      "min_time_ms": 0.06656000018119812,
+      "max_time_ms": 0.5939199924468994,
+      "percentage": 0.0
+    },
+    "alt_torch_compile": {
+      "name": "Alternative: torch.compile",
+      "total_time_ms": 16.958847880363464,
+      "num_calls": 200,
+      "mean_time_ms": 0.08479423940181732,
+      "std_time_ms": 0.029951135776174476,
+      "min_time_ms": 0.04198399931192398,
+      "max_time_ms": 0.40755200386047363,
+      "percentage": 0.0
+    },
+    "noise_with_generator": {
+      "name": "Noise: torch.randn with Generator",
+      "total_time_ms": 3.6183359678834677,
+      "num_calls": 200,
+      "mean_time_ms": 0.018091679839417337,
+      "std_time_ms": 0.013816660616399964,
+      "min_time_ms": 0.008927999995648861,
+      "max_time_ms": 0.16873599588871002,
+      "percentage": 0.0
+    },
+    "noise_without_generator": {
+      "name": "Noise: torch.randn without Generator",
+      "total_time_ms": 3.108959979377687,
+      "num_calls": 200,
+      "mean_time_ms": 0.015544799896888435,
+      "std_time_ms": 0.014392608495837787,
+      "min_time_ms": 0.008927999995648861,
+      "max_time_ms": 0.2088959962129593,
+      "percentage": 0.0
+    },
+    "bmm_contiguous": {
+      "name": "bmm with contiguous tensor",
+      "total_time_ms": 8.719456016551703,
+      "num_calls": 200,
+      "mean_time_ms": 0.04359728008275852,
+      "std_time_ms": 0.020024958860462544,
+      "min_time_ms": 0.0071680000983178616,
+      "max_time_ms": 0.23932799696922302,
+      "percentage": 0.0
+    },
+    "bmm_noncontiguous": {
+      "name": "bmm with non-contiguous tensor",
+      "total_time_ms": 8.44687999598682,
+      "num_calls": 200,
+      "mean_time_ms": 0.0422343999799341,
+      "std_time_ms": 0.02331276132126574,
+      "min_time_ms": 0.006943999789655209,
+      "max_time_ms": 0.28672000765800476,
+      "percentage": 0.0
+    }
+  }
+}

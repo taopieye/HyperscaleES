@@ -1,0 +1,46 @@
+{
+  "timestamp": "2025-12-28 16:39:56",
+  "results": [
+    {
+      "method": "ppo",
+      "seed": 42,
+      "final_return": 248.8,
+      "best_return": 345.2,
+      "steps_to_solve": null,
+      "total_steps": 30000,
+      "wall_time_sec": 10.562478065490723,
+      "eval_history": [
+        {
+          "total_steps": 9984,
+          "mean_return": 142.6,
+          "std_return": 13.215142829345433
+        },
+        {
+          "total_steps": 19968,
+          "mean_return": 345.2,
+          "std_return": 113.26588188858992
+        },
+        {
+          "total_steps": 29952,
+          "mean_return": 215.8,
+          "std_return": 119.06620007374049
+        }
+      ],
+      "hyperparams": {
+        "clip_eps": 0.2,
+        "ent_coef": 0.0,
+        "gae_lambda": 0.95,
+        "gamma": 0.99,
+        "learning_rate": 0.0003,
+        "max_grad_norm": 0.5,
+        "layer_size": 256,
+        "n_layers": 3,
+        "num_envs": 64,
+        "num_epochs": 4,
+        "num_minibatches": 32,
+        "num_steps": 128,
+        "vf_coef": 0.5
+      }
+    }
+  ]
+}

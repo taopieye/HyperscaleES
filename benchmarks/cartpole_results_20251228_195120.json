@@ -1,0 +1,101 @@
+{
+  "timestamp": "2025-12-28 19:51:20",
+  "results": [
+    {
+      "method": "ppo",
+      "seed": 42,
+      "final_return": 73.2109375,
+      "best_return": 73.2109375,
+      "steps_to_solve": null,
+      "total_steps": 30000,
+      "wall_time_sec": 7.790242671966553,
+      "eval_history": [
+        {
+          "total_steps": 10000,
+          "mean_return": 22.8125,
+          "max_return": 97.0
+        },
+        {
+          "total_steps": 20000,
+          "mean_return": 37.578125,
+          "max_return": 101.0
+        },
+        {
+          "total_steps": 30000,
+          "mean_return": 56.3671875,
+          "max_return": 167.0
+        },
+        {
+          "total_steps": 40000,
+          "mean_return": 73.2109375,
+          "max_return": 202.0
+        }
+      ],
+      "hyperparams": {
+        "clip_eps": 0.2,
+        "ent_coef": 0.0001,
+        "gae_lambda": 0.9,
+        "gamma": 0.995,
+        "learning_rate": 0.0003,
+        "max_grad_norm": 0.5,
+        "layer_size": 256,
+        "n_layers": 3,
+        "num_envs": 256,
+        "num_epochs": 4,
+        "num_minibatches": 32,
+        "num_steps": 128,
+        "vf_coef": 0.5,
+        "normalize_obs": true,
+        "normalize_rew": false
+      }
+    },
+    {
+      "method": "ppo",
+      "seed": 142,
+      "final_return": 73.0546875,
+      "best_return": 73.0546875,
+      "steps_to_solve": null,
+      "total_steps": 30000,
+      "wall_time_sec": 6.037522554397583,
+      "eval_history": [
+        {
+          "total_steps": 10000,
+          "mean_return": 26.5078125,
+          "max_return": 112.0
+        },
+        {
+          "total_steps": 20000,
+          "mean_return": 31.9375,
+          "max_return": 76.0
+        },
+        {
+          "total_steps": 30000,
+          "mean_return": 50.8671875,
+          "max_return": 133.0
+        },
+        {
+          "total_steps": 40000,
+          "mean_return": 73.0546875,
+          "max_return": 199.0
+        }
+      ],
+      "hyperparams": {
+        "clip_eps": 0.2,
+        "ent_coef": 0.0001,
+        "gae_lambda": 0.9,
+        "gamma": 0.995,
+        "learning_rate": 0.0003,
+        "max_grad_norm": 0.5,
+        "layer_size": 256,
+        "n_layers": 3,
+        "num_envs": 256,
+        "num_epochs": 4,
+        "num_minibatches": 32,
+        "num_steps": 128,
+        "vf_coef": 0.5,
+        "normalize_obs": true,
+        "normalize_rew": false
+      }
+    }
+  ]
+}

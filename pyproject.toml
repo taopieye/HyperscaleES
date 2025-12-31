@@ -61,4 +61,8 @@ dependencies = [
     "pytest",
     "gymnasium",
     "rich",
+    "rejax",
+    "evosax",
+    "flax",
+    "pymupdf>=1.26.7",
 ]

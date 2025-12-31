@@ -1,0 +1,327 @@
+{
+  "timestamp": "2025-12-28 19:53:45",
+  "results": [
+    {
+      "method": "torch_eggroll",
+      "seed": 42,
+      "final_return": 20.20458984375,
+      "best_return": 320.0,
+      "steps_to_solve": null,
+      "total_steps": 82293,
+      "wall_time_sec": 6.294013261795044,
+      "eval_history": [
+        {
+          "epoch": 0,
+          "total_steps": 40914,
+          "mean_return": 19.9775390625,
+          "max_return": 320.0,
+          "sigma": 0.1998,
+          "lr": 0.09995000000000001
+        },
+        {
+          "epoch": 1,
+          "total_steps": 82293,
+          "mean_return": 20.20458984375,
+          "max_return": 216.0,
+          "sigma": 0.1996002,
+          "lr": 0.09990002500000002
+        }
+      ],
+      "hyperparams": {
+        "pop_size": 2048,
+        "n_parallel_evaluations": 1,
+        "rank": 4,
+        "optimizer": "sgd",
+        "learning_rate": 0.1,
+        "lr_decay": 0.9995,
+        "sigma": 0.2,
+        "sigma_decay": 0.999,
+        "rank_transform": false,
+        "deterministic_policy": false,
+        "layer_size": 256,
+        "n_layers": 3,
+        "activation": "pqn"
+      }
+    },
+    {
+      "method": "torch_eggroll",
+      "seed": 142,
+      "final_return": 19.27587890625,
+      "best_return": 423.0,
+      "steps_to_solve": null,
+      "total_steps": 76805,
+      "wall_time_sec": 10.735963106155396,
+      "eval_history": [
+        {
+          "epoch": 0,
+          "total_steps": 37328,
+          "mean_return": 18.2265625,
+          "max_return": 244.0,
+          "sigma": 0.1998,
+          "lr": 0.09995000000000001
+        },
+        {
+          "epoch": 1,
+          "total_steps": 76805,
+          "mean_return": 19.27587890625,
+          "max_return": 423.0,
+          "sigma": 0.1996002,
+          "lr": 0.09990002500000002
+        }
+      ],
+      "hyperparams": {
+        "pop_size": 2048,
+        "n_parallel_evaluations": 1,
+        "rank": 4,
+        "optimizer": "sgd",
+        "learning_rate": 0.1,
+        "lr_decay": 0.9995,
+        "sigma": 0.2,
+        "sigma_decay": 0.999,
+        "rank_transform": false,
+        "deterministic_policy": false,
+        "layer_size": 256,
+        "n_layers": 3,
+        "activation": "pqn"
+      }
+    },
+    {
+      "method": "ppo",
+      "seed": 42,
+      "final_return": 118.984375,
+      "best_return": 118.984375,
+      "steps_to_solve": null,
+      "total_steps": 50000,
+      "wall_time_sec": 8.03678011894226,
+      "eval_history": [
+        {
+          "total_steps": 10000,
+          "mean_return": 22.8125,
+          "max_return": 97.0
+        },
+        {
+          "total_steps": 20000,
+          "mean_return": 37.546875,
+          "max_return": 101.0
+        },
+        {
+          "total_steps": 30000,
+          "mean_return": 56.3125,
+          "max_return": 167.0
+        },
+        {
+          "total_steps": 40000,
+          "mean_return": 71.7109375,
+          "max_return": 202.0
+        },
+        {
+          "total_steps": 50000,
+          "mean_return": 97.9921875,
+          "max_return": 223.0
+        },
+        {
+          "total_steps": 60000,
+          "mean_return": 118.984375,
+          "max_return": 244.0
+        }
+      ],
+      "hyperparams": {
+        "clip_eps": 0.2,
+        "ent_coef": 0.0001,
+        "gae_lambda": 0.9,
+        "gamma": 0.995,
+        "learning_rate": 0.0003,
+        "max_grad_norm": 0.5,
+        "layer_size": 256,
+        "n_layers": 3,
+        "num_envs": 256,
+        "num_epochs": 4,
+        "num_minibatches": 32,
+        "num_steps": 128,
+        "vf_coef": 0.5,
+        "normalize_obs": true,
+        "normalize_rew": false
+      }
+    },
+    {
+      "method": "ppo",
+      "seed": 142,
+      "final_return": 97.703125,
+      "best_return": 97.703125,
+      "steps_to_solve": null,
+      "total_steps": 50000,
+      "wall_time_sec": 6.139715671539307,
+      "eval_history": [
+        {
+          "total_steps": 10000,
+          "mean_return": 26.5078125,
+          "max_return": 112.0
+        },
+        {
+          "total_steps": 20000,
+          "mean_return": 31.9375,
+          "max_return": 76.0
+        },
+        {
+          "total_steps": 30000,
+          "mean_return": 51.421875,
+          "max_return": 133.0
+        },
+        {
+          "total_steps": 40000,
+          "mean_return": 73.0234375,
+          "max_return": 199.0
+        },
+        {
+          "total_steps": 50000,
+          "mean_return": 90.1171875,
+          "max_return": 180.0
+        },
+        {
+          "total_steps": 60000,
+          "mean_return": 97.703125,
+          "max_return": 185.0
+        }
+      ],
+      "hyperparams": {
+        "clip_eps": 0.2,
+        "ent_coef": 0.0001,
+        "gae_lambda": 0.9,
+        "gamma": 0.995,
+        "learning_rate": 0.0003,
+        "max_grad_norm": 0.5,
+        "layer_size": 256,
+        "n_layers": 3,
+        "num_envs": 256,
+        "num_epochs": 4,
+        "num_minibatches": 32,
+        "num_steps": 128,
+        "vf_coef": 0.5,
+        "normalize_obs": true,
+        "normalize_rew": false
+      }
+    },
+    {
+      "method": "openes",
+      "seed": 42,
+      "final_return": 25.92578125,
+      "best_return": 500.0,
+      "steps_to_solve": null,
+      "total_steps": 63015,
+      "wall_time_sec": 22.30992078781128,
+      "eval_history": [
+        {
+          "epoch": 0,
+          "total_steps": 9117,
+          "mean_return": 17.806640625,
+          "max_return": 488.0
+        },
+        {
+          "epoch": 1,
+          "total_steps": 18155,
+          "mean_return": 17.65234375,
+          "max_return": 500.0
+        },
+        {
+          "epoch": 2,
+          "total_steps": 27490,
+          "mean_return": 18.232421875,
+          "max_return": 274.0
+        },
+        {
+          "epoch": 3,
+          "total_steps": 37881,
+          "mean_return": 20.294921875,
+          "max_return": 257.0
+        },
+        {
+          "epoch": 4,
+          "total_steps": 49741,
+          "mean_return": 23.1640625,
+          "max_return": 500.0
+        },
+        {
+          "epoch": 5,
+          "total_steps": 63015,
+          "mean_return": 25.92578125,
+          "max_return": 429.0
+        }
+      ],
+      "hyperparams": {
+        "pop_size": 512,
+        "n_parallel_evaluations": 4,
+        "optimizer": "adamw",
+        "learning_rate": 0.1,
+        "lr_decay": 0.9995,
+        "sigma": 0.5,
+        "sigma_decay": 0.9995,
+        "rank_transform": true,
+        "deterministic_policy": true,
+        "layer_size": 256,
+        "n_layers": 3,
+        "activation": "pqn"
+      }
+    },
+    {
+      "method": "openes",
+      "seed": 142,
+      "final_return": 20.259765625,
+      "best_return": 457.0,
+      "steps_to_solve": null,
+      "total_steps": 58135,
+      "wall_time_sec": 14.415787935256958,
+      "eval_history": [
+        {
+          "epoch": 0,
+          "total_steps": 9333,
+          "mean_return": 18.228515625,
+          "max_return": 457.0
+        },
+        {
+          "epoch": 1,
+          "total_steps": 18967,
+          "mean_return": 18.81640625,
+          "max_return": 303.0
+        },
+        {
+          "epoch": 2,
+          "total_steps": 28188,
+          "mean_return": 18.009765625,
+          "max_return": 181.0
+        },
+        {
+          "epoch": 3,
+          "total_steps": 38183,
+          "mean_return": 19.521484375,
+          "max_return": 268.0
+        },
+        {
+          "epoch": 4,
+          "total_steps": 47762,
+          "mean_return": 18.708984375,
+          "max_return": 222.0
+        },
+        {
+          "epoch": 5,
+          "total_steps": 58135,
+          "mean_return": 20.259765625,
+          "max_return": 303.0
+        }
+      ],
+      "hyperparams": {
+        "pop_size": 512,
+        "n_parallel_evaluations": 4,
+        "optimizer": "adamw",
+        "learning_rate": 0.1,
+        "lr_decay": 0.9995,
+        "sigma": 0.5,
+        "sigma_decay": 0.9995,
+        "rank_transform": true,
+        "deterministic_policy": true,
+        "layer_size": 256,
+        "n_layers": 3,
+        "activation": "pqn"
+      }
+    }
+  ]
+}

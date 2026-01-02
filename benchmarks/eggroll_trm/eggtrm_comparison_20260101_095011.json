@@ -1,0 +1,59 @@
+{
+  "StandardTRM_fp32": {
+    "params": 50181,
+    "max_population": 65536,
+    "throughput": {
+      "256": {
+        "evals_per_sec": 2083.8020616341337,
+        "time_per_gen_ms": 122.85235949869579,
+        "memory_gb": 44.826614784,
+        "oom": false
+      },
+      "1024": {
+        "evals_per_sec": 951.6196632573268,
+        "time_per_gen_ms": 1076.0601525350164,
+        "memory_gb": 45.179458048,
+        "oom": false
+      },
+      "4096": {
+        "evals_per_sec": 666.2797649328578,
+        "time_per_gen_ms": 6147.567756935799,
+        "memory_gb": 46.578567168,
+        "oom": false
+      },
+      "16384": {
+        "evals_per_sec": 530.3181644686132,
+        "time_per_gen_ms": 30894.661163298104,
+        "memory_gb": 52.176961024,
+        "oom": false
+      }
+    }
+  },
+  "StandardTRM_fp16": {
+    "params": 50181,
+    "max_population": 8192,
+    "throughput": {
+      "256": {
+        "evals_per_sec": 2057.9482617900726,
+        "time_per_gen_ms": 124.3957415029096,
+        "memory_gb": 57.51236096,
+        "oom": false
+      }
+    }
+  },
+  "EGGTRM_fp32": {
+    "params": 50053,
+    "max_population": 256,
+    "throughput": {}
+  },
+  "EGGTRM_fp16": {
+    "params": 50053,
+    "max_population": 256,
+    "throughput": {}
+  },
+  "EGGTRMDeep_fp16": {
+    "params": 161733,
+    "max_population": 128,
+    "throughput": {}
+  }
+}

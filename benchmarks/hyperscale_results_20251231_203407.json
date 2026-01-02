@@ -1,0 +1,115 @@
+{
+  "timestamp": "2025-12-31T20:34:07.906617",
+  "gpu_name": "NVIDIA GeForce RTX 4090",
+  "model_size": "medium",
+  "model_config": {
+    "input_dim": 64,
+    "hidden_dim": 512,
+    "output_dim": 64,
+    "n_layers": 3
+  },
+  "rank": 4,
+  "max_population": 475006,
+  "results": [
+    {
+      "success": true,
+      "pop_size": 1024,
+      "mean_time_ms": 1.7826335155405104,
+      "std_time_ms": 0.20354385989736726,
+      "throughput": 574431.0263848675,
+      "peak_memory_mb": 132.76611328125,
+      "current_memory_mb": 1037.0,
+      "total_memory_mb": 24564.0
+    },
+    {
+      "success": true,
+      "pop_size": 2048,
+      "mean_time_ms": 5.4446515161544085,
+      "std_time_ms": 1.097549335771075,
+      "throughput": 376148.95901483065,
+      "peak_memory_mb": 227.27783203125,
+      "current_memory_mb": 1167.0,
+      "total_memory_mb": 24564.0
+    },
+    {
+      "success": true,
+      "pop_size": 4096,
+      "mean_time_ms": 35.925382492132485,
+      "std_time_ms": 34.77692473188642,
+      "throughput": 114014.09576911276,
+      "peak_memory_mb": 420.30126953125,
+      "current_memory_mb": 1463.0,
+      "total_memory_mb": 24564.0
+    },
+    {
+      "success": true,
+      "pop_size": 8192,
+      "mean_time_ms": 8.320525707677007,
+      "std_time_ms": 12.693850529915514,
+      "throughput": 984553.1746199137,
+      "peak_memory_mb": 806.34814453125,
+      "current_memory_mb": 1957.0,
+      "total_memory_mb": 24564.0
+    },
+    {
+      "success": true,
+      "pop_size": 16384,
+      "mean_time_ms": 6.68000919977203,
+      "std_time_ms": 1.7674804782538729,
+      "throughput": 2452691.2329041613,
+      "peak_memory_mb": 1578.44189453125,
+      "current_memory_mb": 3105.0,
+      "total_memory_mb": 24564.0
+    },
+    {
+      "success": true,
+      "pop_size": 32768,
+      "mean_time_ms": 13.367925176862627,
+      "std_time_ms": 2.701769331128917,
+      "throughput": 2451240.5303341513,
+      "peak_memory_mb": 3122.62939453125,
+      "current_memory_mb": 5273.0,
+      "total_memory_mb": 24564.0
+    },
+    {
+      "success": true,
+      "pop_size": 65536,
+      "mean_time_ms": 26.26409960212186,
+      "std_time_ms": 6.0588216990465815,
+      "throughput": 2495269.245579064,
+      "peak_memory_mb": 6211.00439453125,
+      "current_memory_mb": 9605.0,
+      "total_memory_mb": 24564.0
+    },
+    {
+      "success": true,
+      "pop_size": 131072,
+      "mean_time_ms": 66.80617128731683,
+      "std_time_ms": 63.22533354803571,
+      "throughput": 1961974.432515998,
+      "peak_memory_mb": 12387.75439453125,
+      "current_memory_mb": 18359.0,
+      "total_memory_mb": 24564.0
+    },
+    {
+      "success": true,
+      "pop_size": 262144,
+      "mean_time_ms": 1692.11246779887,
+      "std_time_ms": 505.18599743169204,
+      "throughput": 154921.14442073792,
+      "peak_memory_mb": 24741.25439453125,
+      "current_memory_mb": 23721.0,
+      "total_memory_mb": 24564.0
+    },
+    {
+      "success": true,
+      "pop_size": 475006,
+      "mean_time_ms": 10907.354134996422,
+      "std_time_ms": 1386.545231675726,
+      "throughput": 43549.14987824001,
+      "peak_memory_mb": 44804.16748046875,
+      "current_memory_mb": 23839.0,
+      "total_memory_mb": 24564.0
+    }
+  ]
+}

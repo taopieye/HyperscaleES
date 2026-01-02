@@ -1,0 +1,234 @@
+======================================================================
+TRM THROUGHPUT BENCHMARK WITH EGGROLL
+======================================================================
+Device: NVIDIA GeForce RTX 4090
+Input: 64 → Hidden: 64 → Output: 5
+Batch size: 64, EGGROLL rank: 8
+
+
+============================================================
+Testing TRM_L1_H1 (effective depth: 1)
+============================================================
+Parameters: 50,181
+
+--- Pure Forward Pass ---
+  Batch     64:      112,102 samples/sec
+  Batch    256:      625,497 samples/sec
+  Batch   1024:    2,631,756 samples/sec
+
+--- Finding Max Population Size ---
+  Max population: 262,144
+
+--- EGGROLL Throughput ---
+  Pop     256:        2,412 evals/sec,    106.2 ms/gen, 47.92 GB
+  Pop    1024:        2,567 evals/sec,    398.9 ms/gen, 48.02 GB
+  Pop    4096:        1,597 evals/sec,   2564.6 ms/gen, 48.41 GB
+  Pop   16384:        1,702 evals/sec,   9624.3 ms/gen, 49.94 GB
+  Pop   65536: OOM
+
+============================================================
+Testing TRM_L2_H1 (effective depth: 2)
+============================================================
+Parameters: 50,181
+
+--- Pure Forward Pass ---
+  Batch     64:       88,201 samples/sec
+  Batch    256:      437,006 samples/sec
+  Batch   1024:    1,854,842 samples/sec
+
+--- Finding Max Population Size ---
+  Max population: 16,384
+
+--- EGGROLL Throughput ---
+  Pop     256:        2,246 evals/sec,    114.0 ms/gen, 57.42 GB
+  Pop    1024:        1,801 evals/sec,    568.7 ms/gen, 57.55 GB
+  Pop    4096: OOM
+
+============================================================
+Testing TRM_L4_H1 (effective depth: 4)
+============================================================
+Parameters: 50,181
+
+--- Pure Forward Pass ---
+  Batch     64:       73,479 samples/sec
+  Batch    256:      281,105 samples/sec
+  Batch   1024:      195,484 samples/sec
+
+--- Finding Max Population Size ---
+  Max population: 1,024
+
+--- EGGROLL Throughput ---
+  Pop     256: OOM
+
+============================================================
+Testing TRM_L6_H1 (effective depth: 6)
+============================================================
+Parameters: 50,181
+
+--- Pure Forward Pass ---
+  Batch     64:       45,584 samples/sec
+  Batch    256:      154,299 samples/sec
+  Batch   1024:      143,324 samples/sec
+
+--- Finding Max Population Size ---
+  Max population: 128
+
+--- EGGROLL Throughput ---
+  Pop     256: SKIPPED (exceeds max)
+  Pop    1024: SKIPPED (exceeds max)
+  Pop    4096: SKIPPED (exceeds max)
+  Pop   16384: SKIPPED (exceeds max)
+  Pop   65536: SKIPPED (exceeds max)
+
+============================================================
+Testing TRM_L3_H2 (effective depth: 6)
+============================================================
+Parameters: 50,181
+
+--- Pure Forward Pass ---
+  Batch     64:       32,407 samples/sec
+  Batch    256:      165,640 samples/sec
+  Batch   1024:      136,699 samples/sec
+
+--- Finding Max Population Size ---
+  Max population: 128
+
+--- EGGROLL Throughput ---
+  Pop     256: SKIPPED (exceeds max)
+  Pop    1024: SKIPPED (exceeds max)
+  Pop    4096: SKIPPED (exceeds max)
+  Pop   16384: SKIPPED (exceeds max)
+  Pop   65536: SKIPPED (exceeds max)
+
+============================================================
+Testing TRM_L4_H2 (effective depth: 8)
+============================================================
+Parameters: 50,181
+
+--- Pure Forward Pass ---
+  Batch     64:       32,209 samples/sec
+  Batch    256:      132,554 samples/sec
+  Batch   1024:       99,242 samples/sec
+
+--- Finding Max Population Size ---
+  Max population: 128
+
+--- EGGROLL Throughput ---
+  Pop     256: SKIPPED (exceeds max)
+  Pop    1024: SKIPPED (exceeds max)
+  Pop    4096: SKIPPED (exceeds max)
+  Pop   16384: SKIPPED (exceeds max)
+  Pop   65536: SKIPPED (exceeds max)
+
+============================================================
+Testing TRM_L6_H2 (effective depth: 12)
+============================================================
+Parameters: 50,181
+
+--- Pure Forward Pass ---
+  Batch     64:       20,592 samples/sec
+  Batch    256:       93,492 samples/sec
+  Batch   1024:       67,539 samples/sec
+
+--- Finding Max Population Size ---
+  Max population: 128
+
+--- EGGROLL Throughput ---
+  Pop     256: SKIPPED (exceeds max)
+  Pop    1024: SKIPPED (exceeds max)
+  Pop    4096: SKIPPED (exceeds max)
+  Pop   16384: SKIPPED (exceeds max)
+  Pop   65536: SKIPPED (exceeds max)
+
+============================================================
+Testing TRM_L4_H3 (effective depth: 12)
+============================================================
+Parameters: 50,181
+
+--- Pure Forward Pass ---
+  Batch     64:       18,193 samples/sec
+  Batch    256:       80,536 samples/sec
+  Batch   1024:       64,149 samples/sec
+
+--- Finding Max Population Size ---
+  Max population: 128
+
+--- EGGROLL Throughput ---
+  Pop     256: SKIPPED (exceeds max)
+  Pop    1024: SKIPPED (exceeds max)
+  Pop    4096: SKIPPED (exceeds max)
+  Pop   16384: SKIPPED (exceeds max)
+  Pop   65536: SKIPPED (exceeds max)
+
+============================================================
+Testing TRM_L6_H3 (effective depth: 18)
+============================================================
+Parameters: 50,181
+
+--- Pure Forward Pass ---
+  Batch     64:       13,122 samples/sec
+  Batch    256:       64,191 samples/sec
+  Batch   1024:       47,960 samples/sec
+
+--- Finding Max Population Size ---
+  Max population: 128
+
+--- EGGROLL Throughput ---
+  Pop     256: SKIPPED (exceeds max)
+  Pop    1024: SKIPPED (exceeds max)
+  Pop    4096: SKIPPED (exceeds max)
+  Pop   16384: SKIPPED (exceeds max)
+  Pop   65536: SKIPPED (exceeds max)
+
+============================================================
+Baseline: Standard MLP (18 layers = TRM L6×H3 equivalent)
+============================================================
+Parameters: 77,381
+
+--- Pure Forward Pass ---
+  Batch     64:       36,624 samples/sec
+  Batch    256:       97,378 samples/sec
+  Batch   1024:      440,815 samples/sec
+
+--- Finding Max Population Size ---
+  Max population: 128
+
+--- EGGROLL Throughput ---
+  Pop     256: SKIPPED (exceeds max)
+  Pop    1024: SKIPPED (exceeds max)
+  Pop    4096: SKIPPED (exceeds max)
+  Pop   16384: SKIPPED (exceeds max)
+  Pop   65536: SKIPPED (exceeds max)
+
+================================================================================
+SUMMARY: TRM vs MLP Throughput with EGGROLL
+================================================================================
+
+Model                    Params    Max Pop    Best Evals/s Effective Depth
+---------------------------------------------------------------------------
+TRM_L1_H1                50,181    262,144           2,567               1
+TRM_L2_H1                50,181     16,384           2,246               2
+TRM_L4_H1                50,181      1,024               0               4
+TRM_L6_H1                50,181        128               0               6
+TRM_L3_H2                50,181        128               0               6
+TRM_L4_H2                50,181        128               0               8
+TRM_L6_H2                50,181        128               0              12
+TRM_L4_H3                50,181        128               0              12
+TRM_L6_H3                50,181        128               0              18
+StandardMLP_18L          77,381        128               0              18
+
+================================================================================
+KEY INSIGHTS
+================================================================================
+
+1. Parameter Efficiency:
+   TRM (L6×H3): 50,181 params
+   MLP (18L):   77,381 params
+   Ratio: TRM uses 64.8% of MLP params
+
+2. Population Capacity:
+   TRM max population: 128
+   MLP max population: 128
+   TRM allows 1.0x larger populations
+
+Results saved to: /home/flaco/eggroll/HyperscaleES/benchmarks/trm_throughput_20260101_005546.json

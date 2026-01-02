@@ -1,0 +1,158 @@
+{
+  "timestamp": "2025-12-31T14:11:12.274989",
+  "config": {
+    "env_name": "CartPole-v1",
+    "pop_sizes": [
+      64,
+      256,
+      1024
+    ],
+    "rank": 4,
+    "sigma": 0.2,
+    "lr": 0.1,
+    "episode_length": 200,
+    "num_epochs": 5,
+    "warmup_epochs": 3,
+    "hidden_size": 256,
+    "n_layers": 3,
+    "seed": 42
+  },
+  "gpu_name": "NVIDIA GeForce RTX 4090",
+  "results": [
+    {
+      "method": "jax_inference_gymnax",
+      "env_name": "CartPole-v1",
+      "pop_size": 64,
+      "rank": 0,
+      "mean_steps_per_sec": 30450.232697622716,
+      "std_steps_per_sec": 1078.2129571753992,
+      "mean_epoch_time_ms": 420.8853037795052,
+      "std_epoch_time_ms": 14.898916911384676,
+      "timing_breakdown": {
+        "env_step_ms": 188.8008311158046,
+        "forward_pass_ms": 130.78425901476294,
+        "es_update_ms": 0.0,
+        "total_epoch_ms": 420.8853037795052
+      },
+      "memory_mb": 19314.0,
+      "epochs_run": 5
+    },
+    {
+      "method": "jax_inference_gymnax",
+      "env_name": "CartPole-v1",
+      "pop_size": 256,
+      "rank": 0,
+      "mean_steps_per_sec": 79418.60758404294,
+      "std_steps_per_sec": 1033.6505515931826,
+      "mean_epoch_time_ms": 644.7940056212246,
+      "std_epoch_time_ms": 8.361258687628602,
+      "timing_breakdown": {
+        "env_step_ms": 292.0849475078285,
+        "forward_pass_ms": 252.69603673368692,
+        "es_update_ms": 0.0,
+        "total_epoch_ms": 644.7940056212246
+      },
+      "memory_mb": 19293.0,
+      "epochs_run": 5
+    },
+    {
+      "method": "jax_inference_gymnax",
+      "env_name": "CartPole-v1",
+      "pop_size": 1024,
+      "rank": 0,
+      "mean_steps_per_sec": 302393.33931822376,
+      "std_steps_per_sec": 6351.2878891996215,
+      "mean_epoch_time_ms": 677.5597305735573,
+      "std_epoch_time_ms": 14.102394426543325,
+      "timing_breakdown": {
+        "env_step_ms": 313.70999831706285,
+        "forward_pass_ms": 261.24013303779066,
+        "es_update_ms": 0.0,
+        "total_epoch_ms": 677.5597305735573
+      },
+      "memory_mb": 19293.0,
+      "epochs_run": 5
+    },
+    {
+      "method": "jax_eggroll_gymnax",
+      "env_name": "CartPole-v1",
+      "pop_size": 64,
+      "rank": 4,
+      "mean_steps_per_sec": 17708.542006587213,
+      "std_steps_per_sec": 81.65922643356696,
+      "mean_epoch_time_ms": 722.8303874144331,
+      "std_epoch_time_ms": 3.3343728228637977,
+      "timing_breakdown": {
+        "env_step_ms": 316.7642365442589,
+        "forward_pass_ms": 287.13142685592175,
+        "es_update_ms": 2.018764801323414,
+        "total_epoch_ms": 722.8303874144331
+      },
+      "memory_mb": 19292.0,
+      "epochs_run": 5
+    },
+    {
+      "method": "jax_eggroll_gymnax",
+      "env_name": "CartPole-v1",
+      "pop_size": 256,
+      "rank": 4,
+      "mean_steps_per_sec": 71481.13120175761,
+      "std_steps_per_sec": 1127.0410367874656,
+      "mean_epoch_time_ms": 716.4509244030342,
+      "std_epoch_time_ms": 11.289689704705967,
+      "timing_breakdown": {
+        "env_step_ms": 310.57596902828664,
+        "forward_pass_ms": 282.67505287658423,
+        "es_update_ms": 0.9842886356636882,
+        "total_epoch_ms": 716.4509244030342
+      },
+      "memory_mb": 19292.0,
+      "epochs_run": 5
+    },
+    {
+      "method": "jax_eggroll_gymnax",
+      "env_name": "CartPole-v1",
+      "pop_size": 1024,
+      "rank": 4,
+      "mean_steps_per_sec": 275903.38551576494,
+      "std_steps_per_sec": 3433.5351814497194,
+      "mean_epoch_time_ms": 742.4039314500988,
+      "std_epoch_time_ms": 9.249658635077928,
+      "timing_breakdown": {
+        "env_step_ms": 312.912076478824,
+        "forward_pass_ms": 309.65778939425945,
+        "es_update_ms": 2.109832363203168,
+        "total_epoch_ms": 742.4039314500988
+      },
+      "memory_mb": 19292.0,
+      "epochs_run": 5
+    }
+  ],
+  "summary": {
+    "by_method": {
+      "jax_eggroll_gymnax": {
+        "avg_steps_per_sec": 121697.68624136993,
+        "avg_epoch_time_ms": 727.228414422522,
+        "pop_sizes_tested": [
+          64,
+          256,
+          1024
+        ]
+      },
+      "jax_inference_gymnax": {
+        "avg_steps_per_sec": 137420.7265332965,
+        "avg_epoch_time_ms": 581.0796799914291,
+        "pop_sizes_tested": [
+          64,
+          256,
+          1024
+        ]
+      }
+    },
+    "speedup_analysis": {
+      "pop_64_eggroll_overhead_pct": 119.5458605026086,
+      "pop_256_eggroll_overhead_pct": 11.86366692980302,
+      "pop_1024_eggroll_overhead_pct": 18.533774192139447
+    }
+  }
+}

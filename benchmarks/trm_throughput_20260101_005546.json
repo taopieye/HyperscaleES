@@ -1,0 +1,365 @@
+{
+  "config": {
+    "input_dim": 64,
+    "hidden_dim": 64,
+    "output_dim": 5,
+    "batch_size": 64,
+    "trm_configs": [
+      [
+        1,
+        1
+      ],
+      [
+        2,
+        1
+      ],
+      [
+        4,
+        1
+      ],
+      [
+        6,
+        1
+      ],
+      [
+        3,
+        2
+      ],
+      [
+        4,
+        2
+      ],
+      [
+        6,
+        2
+      ],
+      [
+        4,
+        3
+      ],
+      [
+        6,
+        3
+      ]
+    ],
+    "population_sizes": [
+      256,
+      1024,
+      4096,
+      16384,
+      65536
+    ],
+    "rank": 8,
+    "num_warmup": 5,
+    "num_iterations": 30
+  },
+  "device": "cuda",
+  "gpu_name": "NVIDIA GeForce RTX 4090",
+  "timestamp": "2026-01-01T00:41:32.775813",
+  "models": {
+    "TRM_L1_H1": {
+      "L_cycles": 1,
+      "H_cycles": 1,
+      "effective_depth": 1,
+      "num_params": 50181,
+      "forward_pass": {
+        "64": {
+          "samples_per_sec": 112101.64716336706,
+          "time_per_batch_ms": 0.5709104336953411,
+          "batch_size": 64
+        },
+        "256": {
+          "samples_per_sec": 625497.1193309305,
+          "time_per_batch_ms": 0.40927446680143476,
+          "batch_size": 256
+        },
+        "1024": {
+          "samples_per_sec": 2631755.917953573,
+          "time_per_batch_ms": 0.3890938338978837,
+          "batch_size": 1024
+        }
+      },
+      "eggroll": {
+        "256": {
+          "evals_per_sec": 2411.609778115976,
+          "time_per_generation_ms": 106.15316056646407,
+          "population_size": 256,
+          "batch_size": 64,
+          "memory_allocated_gb": 47.924655616,
+          "memory_reserved_gb": 51.68431104,
+          "oom": false
+        },
+        "1024": {
+          "evals_per_sec": 2566.931727234063,
+          "time_per_generation_ms": 398.9198423689231,
+          "population_size": 1024,
+          "batch_size": 64,
+          "memory_allocated_gb": 48.023424,
+          "memory_reserved_gb": 51.690602496,
+          "oom": false
+        },
+        "4096": {
+          "evals_per_sec": 1597.134346626418,
+          "time_per_generation_ms": 2564.5932721012896,
+          "population_size": 4096,
+          "batch_size": 64,
+          "memory_allocated_gb": 48.407609856,
+          "memory_reserved_gb": 51.703185408,
+          "oom": false
+        },
+        "16384": {
+          "evals_per_sec": 1702.361270216007,
+          "time_per_generation_ms": 9624.27910376573,
+          "population_size": 16384,
+          "batch_size": 64,
+          "memory_allocated_gb": 49.937102848,
+          "memory_reserved_gb": 51.707379712,
+          "oom": false
+        }
+      },
+      "max_population": 262144
+    },
+    "TRM_L2_H1": {
+      "L_cycles": 2,
+      "H_cycles": 1,
+      "effective_depth": 2,
+      "num_params": 50181,
+      "forward_pass": {
+        "64": {
+          "samples_per_sec": 88200.90347702173,
+          "time_per_batch_ms": 0.7256161499147614,
+          "batch_size": 64
+        },
+        "256": {
+          "samples_per_sec": 437006.2466494803,
+          "time_per_batch_ms": 0.5858039832673967,
+          "batch_size": 256
+        },
+        "1024": {
+          "samples_per_sec": 1854841.7300437856,
+          "time_per_batch_ms": 0.5520686662445465,
+          "batch_size": 1024
+        }
+      },
+      "eggroll": {
+        "256": {
+          "evals_per_sec": 2246.4459820598786,
+          "time_per_generation_ms": 113.95778133301064,
+          "population_size": 256,
+          "batch_size": 64,
+          "memory_allocated_gb": 57.418854912,
+          "memory_reserved_gb": 57.686360064,
+          "oom": false
+        },
+        "1024": {
+          "evals_per_sec": 1800.6867019322142,
+          "time_per_generation_ms": 568.6719399333621,
+          "population_size": 1024,
+          "batch_size": 64,
+          "memory_allocated_gb": 57.54971136,
+          "memory_reserved_gb": 57.696845824,
+          "oom": false
+        }
+      },
+      "max_population": 16384
+    },
+    "TRM_L4_H1": {
+      "L_cycles": 4,
+      "H_cycles": 1,
+      "effective_depth": 4,
+      "num_params": 50181,
+      "forward_pass": {
+        "64": {
+          "samples_per_sec": 73478.80076656747,
+          "time_per_batch_ms": 0.8709995173073064,
+          "batch_size": 64
+        },
+        "256": {
+          "samples_per_sec": 281104.7274523439,
+          "time_per_batch_ms": 0.9106926173747828,
+          "batch_size": 256
+        },
+        "1024": {
+          "samples_per_sec": 195484.11582030464,
+          "time_per_batch_ms": 5.23827726719901,
+          "batch_size": 1024
+        }
+      },
+      "eggroll": {},
+      "max_population": 1024
+    },
+    "TRM_L6_H1": {
+      "L_cycles": 6,
+      "H_cycles": 1,
+      "effective_depth": 6,
+      "num_params": 50181,
+      "forward_pass": {
+        "64": {
+          "samples_per_sec": 45584.14083426606,
+          "time_per_batch_ms": 1.403997066275527,
+          "batch_size": 64
+        },
+        "256": {
+          "samples_per_sec": 154299.49057816976,
+          "time_per_batch_ms": 1.6591111159262557,
+          "batch_size": 256
+        },
+        "1024": {
+          "samples_per_sec": 143323.5642863566,
+          "time_per_batch_ms": 7.144672999856994,
+          "batch_size": 1024
+        }
+      },
+      "eggroll": {},
+      "max_population": 128
+    },
+    "TRM_L3_H2": {
+      "L_cycles": 3,
+      "H_cycles": 2,
+      "effective_depth": 6,
+      "num_params": 50181,
+      "forward_pass": {
+        "64": {
+          "samples_per_sec": 32407.004168486008,
+          "time_per_batch_ms": 1.9748817159173389,
+          "batch_size": 64
+        },
+        "256": {
+          "samples_per_sec": 165640.22036700553,
+          "time_per_batch_ms": 1.5455183495456974,
+          "batch_size": 256
+        },
+        "1024": {
+          "samples_per_sec": 136698.80721398155,
+          "time_per_batch_ms": 7.490921251398201,
+          "batch_size": 1024
+        }
+      },
+      "eggroll": {},
+      "max_population": 128
+    },
+    "TRM_L4_H2": {
+      "L_cycles": 4,
+      "H_cycles": 2,
+      "effective_depth": 8,
+      "num_params": 50181,
+      "forward_pass": {
+        "64": {
+          "samples_per_sec": 32209.376793310836,
+          "time_per_batch_ms": 1.98699901617753,
+          "batch_size": 64
+        },
+        "256": {
+          "samples_per_sec": 132554.35557012577,
+          "time_per_batch_ms": 1.9312832000044486,
+          "batch_size": 256
+        },
+        "1024": {
+          "samples_per_sec": 99241.84991526655,
+          "time_per_batch_ms": 10.318227651684236,
+          "batch_size": 1024
+        }
+      },
+      "eggroll": {},
+      "max_population": 128
+    },
+    "TRM_L6_H2": {
+      "L_cycles": 6,
+      "H_cycles": 2,
+      "effective_depth": 12,
+      "num_params": 50181,
+      "forward_pass": {
+        "64": {
+          "samples_per_sec": 20591.989568963156,
+          "time_per_batch_ms": 3.1080046823869147,
+          "batch_size": 64
+        },
+        "256": {
+          "samples_per_sec": 93492.11774839944,
+          "time_per_batch_ms": 2.7381987504971526,
+          "batch_size": 256
+        },
+        "1024": {
+          "samples_per_sec": 67539.47358367042,
+          "time_per_batch_ms": 15.161504016335432,
+          "batch_size": 1024
+        }
+      },
+      "eggroll": {},
+      "max_population": 128
+    },
+    "TRM_L4_H3": {
+      "L_cycles": 4,
+      "H_cycles": 3,
+      "effective_depth": 12,
+      "num_params": 50181,
+      "forward_pass": {
+        "64": {
+          "samples_per_sec": 18192.711670227884,
+          "time_per_batch_ms": 3.5178922834650925,
+          "batch_size": 64
+        },
+        "256": {
+          "samples_per_sec": 80536.42166864262,
+          "time_per_batch_ms": 3.1786860490683466,
+          "batch_size": 256
+        },
+        "1024": {
+          "samples_per_sec": 64148.61590600001,
+          "time_per_batch_ms": 15.962932099743435,
+          "batch_size": 1024
+        }
+      },
+      "eggroll": {},
+      "max_population": 128
+    },
+    "TRM_L6_H3": {
+      "L_cycles": 6,
+      "H_cycles": 3,
+      "effective_depth": 18,
+      "num_params": 50181,
+      "forward_pass": {
+        "64": {
+          "samples_per_sec": 13122.34273983477,
+          "time_per_batch_ms": 4.877177899470553,
+          "batch_size": 64
+        },
+        "256": {
+          "samples_per_sec": 64191.101723974505,
+          "time_per_batch_ms": 3.9880917000118643,
+          "batch_size": 256
+        },
+        "1024": {
+          "samples_per_sec": 47959.636945429345,
+          "time_per_batch_ms": 21.351287566358224,
+          "batch_size": 1024
+        }
+      },
+      "eggroll": {},
+      "max_population": 128
+    },
+    "StandardMLP_18L": {
+      "num_layers": 18,
+      "num_params": 77381,
+      "forward_pass": {
+        "64": {
+          "samples_per_sec": 36624.06396517156,
+          "time_per_batch_ms": 1.7474849339729797,
+          "batch_size": 64
+        },
+        "256": {
+          "samples_per_sec": 97377.65216031783,
+          "time_per_batch_ms": 2.6289399499849724,
+          "batch_size": 256
+        },
+        "1024": {
+          "samples_per_sec": 440815.3105770365,
+          "time_per_batch_ms": 2.322968316730112,
+          "batch_size": 1024
+        }
+      },
+      "eggroll": {},
+      "max_population": 128
+    }
+  }
+}

@@ -15,7 +15,22 @@ pytest ./tests -vs
 
 # Run a specific concept
 pytest tests/test_low_rank_structure.py -v
+
+# Run JAX tests only (exclude PyTorch port tests)
+pytest tests/ --ignore=tests/torch/ -v
+
+# Run PyTorch port tests only
+pytest tests/torch/ -v
 ```
+
+---
+
+## Test Suite Structure
+
+- **`tests/`** - JAX implementation tests (current)
+- **`tests/torch/`** - PyTorch port tests (TDD - tests written first)
+
+See [`tests/torch/README.md`](torch/README.md) for details on the PyTorch port test suite.
 
 ---
 

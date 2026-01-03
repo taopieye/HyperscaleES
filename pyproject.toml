@@ -36,7 +36,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "jax",
+    "jax[cuda12]",
     "jaxlib",
     "huggingface_hub",
     "tokenizers",
@@ -59,4 +59,11 @@ dependencies = [
     "math-verify",
     "antlr4-python3-runtime==4.9.*",
     "pytest",
+    "gymnasium",
+    "rich",
+    "rejax",
+    "evosax",
+    "flax",
+    "pymupdf>=1.26.7",
+    "torchvision>=0.24.1",
 ]

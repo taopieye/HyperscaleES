@@ -1,19 +1,10 @@
 # Functional EGGROLL (Torch)
 
-> **Train neural networks without backpropagation.** EGGROLL (**E**volution **G**uided **G**eneral **O**ptimization via **L**ow-rank **L**earning) uses evolution strategies with low-rank perturbations to estimate gradients—achieving **1.3M+ steps/sec** on CartPole and competitive accuracy on MNIST in seconds.
+> **Train neural networks without backpropagation.** EGGROLL (**E**volution **G**uided **G**eneral **O**ptimization via **L**ow-rank **L**earning) uses evolution strategies with low-rank perturbations to estimate gradients.
 
 ## Understanding EGGROLL
 
-**New to the codebase?** The [test suite](tests/test_core.py) serves as living documentation—each test class verifies a key mathematical property from the paper with explanatory docstrings:
-
-| Test Class | What It Proves |
-|------------|----------------|
-| `TestLowRankStructure` | Perturbations are rank-r; memory savings are 48x for typical layers |
-| `TestForwardEquivalence` | Efficient `x @ B @ A.T` equals explicit `x @ (A @ B.T)` |
-| `TestAntitheticSampling` | Thread pairs have opposite perturbations for variance reduction |
-| `TestHighRankAccumulation` | Sum of low-rank perturbations → high-rank update |
-| `TestESGradient` | Gradient formula is correct; updates favor high-fitness perturbations |
-| `TestEggrollStep` | Full pipeline: `W_new = W_old + lr * grad` verified exactly |
+**New to the codebase?** Peep the [test suite](tests/test_core.py).
 
 ```bash
 # Run tests with documentation output
@@ -35,11 +26,6 @@ EGGROLL is an evolution strategies (ES) algorithm designed to scale backprop-fre
 
 **Important:** While each perturbation is low-rank, the **overall EGGROLL update is high-rank**—it's rank $\min(Nr, m, n)$ since it averages across $N$ population members. This means you get the memory benefits of low-rank without sacrificing expressiveness.
 
-**Real-world wins:**
-- ✅ **RL without reward shaping**: Direct policy optimization from sparse rewards
-- ✅ **Non-differentiable objectives**: Optimize BLEU, accuracy, latency—anything measurable
-- ✅ **Pure integer training**: No gradients means no special care for low-precision dtypes
-
 ---
 
 ## Quick Start (5 minutes)
@@ -54,28 +40,15 @@ pip install torch gymnasium torchvision rich numpy
 ### Run Your First Experiment
 
 ```bash
-# Solve CartPole in ~12 epochs (~9 seconds)
+# Solve CartPole
 python -m hyperscalees.torch.recipes --experiment cartpole
 
-# Train MNIST MLP classifier to ~88% accuracy (~3 seconds)  
+# Train MNIST MLP classifier 
 python -m hyperscalees.torch.recipes --experiment mnist
 
-# Train MNIST CNN with perturbed conv layers (~13 seconds)
+# Train MNIST CNN with perturbed conv layers
 python -m hyperscalees.torch.recipes --experiment mnist_cnn
 ```
-
-**Expected output (CartPole):**
-```
-Torch EGGROLL - CartPole-v1
-Population: 2048, Rank: 4, Sigma: 0.2, LR: 0.1
-Network: 4 -> 256 -> 2 (1,794 params)
-
-Epoch   0 | mean=  80.0 max= 500.0 min=   8.0 |   55,593 steps/s
-Epoch  10 | mean= 470.7 max= 500.0 min=   8.0 |  991,203 steps/s
-Epoch  12 | mean= 477.8 max= 500.0 min=   9.0 | 1,087,968 steps/s
-Solved at epoch 12!
-```
-
 ---
 
 ## The Core Idea
@@ -88,13 +61,6 @@ Instead of backprop, EGGROLL:
 4. **Updates weights** in the direction of better performance
 
 The magic: **low-rank perturbations** make this 100x more memory-efficient than naive ES, while the aggregate update remains high-rank.
-
-```python
-# The fundamental operation (what you need to know):
-perturbed_output = perturbed_linear(x, W, b, A_scaled, B)
-# Computes: x @ W.T + b + x @ B @ A.T
-# Never materializes W + A @ B.T — that's the key memory savings!
-```
 
 ---
 
@@ -150,7 +116,7 @@ output = forward_eval(x, params)
 
 ## Complete Working Recipes
 
-These are **copy-paste ready** examples that match the proven implementations in `recipes.py`.
+For more context, see the [recipes](recipies.py) file.
 
 ### Recipe 1: Reinforcement Learning (CartPole)
 
@@ -205,7 +171,7 @@ for epoch in range(config.max_epochs):
     perts = generate_perturbations(shapes, config.population_size, config.rank, 
                                    current_sigma, gen, config.dtype)
     
-    # 2. Run episodes (all 2048 policies in parallel!)
+    # 2. Run episodes (all 2048 policies in parallel)
     obs, _ = envs.reset(seed=epoch)
     episode_returns = torch.zeros(config.population_size, device="cuda")
     dones = torch.zeros(config.population_size, dtype=torch.bool, device="cuda")
@@ -222,7 +188,7 @@ for epoch in range(config.max_epochs):
         if dones.all():
             break
     
-    # 3. ES update: single-line EGGROLL step with decay!
+    # 3. ES update
     current_lr, current_sigma = eggroll_step(
         params, episode_returns, perts, current_lr, current_sigma, config
     )
@@ -309,7 +275,7 @@ for epoch in range(config.max_epochs):
     # 4. Compute fitness (negative cross-entropy loss)
     fitnesses = compute_classification_fitness(logits, batch_labels)
     
-    # 5. Single-line EGGROLL step with decay!
+    # 5. Step
     current_lr, current_sigma = eggroll_step(
         params, fitnesses, perts, current_lr, current_sigma, config
     )
@@ -362,7 +328,7 @@ params = {
     'fc.weight': torch.randn(10, fc_in, device="cuda") / math.sqrt(fc_in),
     'fc.bias': torch.zeros(10, device="cuda"),
 }
-shapes = get_weight_shapes(params)  # Handles both 2D and 4D weights!
+shapes = get_weight_shapes(params)  # Handles both 2D and 4D weights
 
 # ============ FORWARD FUNCTIONS ============
 def forward(x, params, perts):

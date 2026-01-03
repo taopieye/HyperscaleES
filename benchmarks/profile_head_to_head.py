@@ -166,9 +166,10 @@ def profile_jax_eggroll(
     
     import jax
     import jax.numpy as jnp
+    import optax
     from functools import partial
     from hyperscalees.noiser.eggroll import EggRoll
-    from hyperscalees.models.common import MLP
+    from hyperscalees.models.common import MLP, simple_es_tree_key
     
     if verbose:
         print(f"\n{'='*60}")
@@ -188,15 +189,26 @@ def profile_jax_eggroll(
         input_dim=input_dim,
     )
     
-    # Initialize model
-    MODEL = MLP
+    # Initialize model using correct API
     key = jax.random.PRNGKey(42)
-    frozen_params, params = MODEL.init(key, input_dim, output_dim, layer_size, n_layers)
-    es_map = MODEL.get_es_map(frozen_params, "eggroll")
-    es_tree_key = MODEL.get_es_tree_key(frozen_params, key)
+    model_key, es_key = jax.random.split(key)
+    
+    # Build hidden_dims for n_layers: [layer_size] * (n_layers - 1) for hidden layers
+    hidden_dims = [layer_size] * (n_layers - 1) if n_layers > 1 else []
+    
+    frozen_params, params, scan_map, es_map = MLP.rand_init(
+        model_key,
+        in_dim=input_dim,
+        out_dim=output_dim,
+        hidden_dims=hidden_dims,
+        use_bias=True,
+        activation="relu",
+        dtype="float32"
+    )
+    es_tree_key = simple_es_tree_key(params, es_key, scan_map)
     
     frozen_noiser_params, noiser_params = EggRoll.init_noiser(
-        params, sigma=0.2, lr=0.1, rank=rank
+        params, sigma=0.2, lr=0.1, solver=optax.sgd, rank=rank
     )
     
     # Count parameters
@@ -222,8 +234,8 @@ def profile_jax_eggroll(
             @jax.jit
             def test_forward(noiser_params, params, iterinfos, x):
                 return jax.vmap(
-                    lambda i, xi: MODEL.forward(EggRoll, frozen_noiser_params, noiser_params, 
-                                                frozen_params, params, es_tree_key, i, xi),
+                    lambda i, xi: MLP.forward(EggRoll, frozen_noiser_params, noiser_params, 
+                                              frozen_params, params, es_tree_key, i, xi),
                     in_axes=(0, 0)
                 )(iterinfos, x)
             
@@ -267,8 +279,8 @@ def profile_jax_eggroll(
         @jax.jit
         def forward_fn(noiser_params, params, iterinfos, x):
             return jax.vmap(
-                lambda i, xi: MODEL.forward(EggRoll, frozen_noiser_params, noiser_params,
-                                            frozen_params, params, es_tree_key, i, xi),
+                lambda i, xi: MLP.forward(EggRoll, frozen_noiser_params, noiser_params,
+                                          frozen_params, params, es_tree_key, i, xi),
                 in_axes=(0, 0)
             )(iterinfos, x)
         

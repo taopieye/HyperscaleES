@@ -28,19 +28,376 @@ Clone the repo, enter the folder (cd HyperscaleES), and replace USERNAME in the 
   docker run -it --rm -v $(pwd):/app --name ${USER}_yourcontainername ${USER}_hyperscalees python tests/end_to_end_test.py
 #+END_SRC
 
-** Usage
+** Torch EGGROLL (Dict-Based API)
 
-To run the LLM experiments, run the following program. You can check the file for command-line arguments. 
+The Torch implementation provides a simple, zero-overhead dict-based API for EGGROLL.
 
-#+BEGIN_SRC
-  python -m llm_experiments.general_do_evolution
+*** What You Must Define
+
+To use Torch EGGROLL, you must explicitly define *four things*:
+
+**** 1. Parameter Dictionary (=params=)
+
+You must create a Python dict mapping string keys to weight tensors. Each key identifies a layer for perturbation lookup.
+
+#+BEGIN_SRC python
+  # REQUIRED: Initialize all trainable weights as a flat dict
+  # Keys are arbitrary strings, but must match what you pass to perturbed_forward()
+  # Values are 2D tensors: (out_features, in_features) for linear layers
+  #                        (C_out, C_in, H, W) for conv layers
+  params = {
+      'layer1.weight': torch.randn(hidden_dim, input_dim, device="cuda") * 0.1,
+      'layer1.bias': torch.zeros(hidden_dim, device="cuda"),  # Optional: biases
+      'layer2.weight': torch.randn(output_dim, hidden_dim, device="cuda") * 0.1,
+      'layer2.bias': torch.zeros(output_dim, device="cuda"),
+  }
 #+END_SRC
 
-** Core Ideas
+**** 2. Perturbed Forward Function (=forward_perturbed=)
+
+You must express your neural network as a *composition of =perturbed_forward()= calls*. This function takes the perturbations dict and applies noise to each layer.
+
+#+BEGIN_SRC python
+  # REQUIRED: Define how to run forward pass WITH perturbations
+  # Input x has shape (population_size, batch_size, input_dim)
+  # Output has shape (population_size, batch_size, output_dim)
+  def forward_perturbed(x, params, perts):
+      """
+      Args:
+          x: Input tensor, shape (pop, batch, in_features)
+          params: Your parameter dict
+          perts: Perturbations dict from generate_perturbations()
+      Returns:
+          Output tensor, shape (pop, batch, out_features)
+      """
+      # Layer 1: Use perturbed_forward() with the KEY matching your params dict
+      h = perturbed_forward(x, params['layer1.weight'], params['layer1.bias'], 
+                            perts, 'layer1.weight')  # <-- key must match!
+      h = torch.tanh(h)  # Your activation
+      
+      # Layer 2: Same pattern
+      out = perturbed_forward(h, params['layer2.weight'], params['layer2.bias'],
+                              perts, 'layer2.weight')
+      return out
+#+END_SRC
+
+**** 3. Clean Forward Function (=forward_clean=)
+
+You must define a separate forward pass *without* perturbations for evaluation. This is standard PyTorch.
+
+#+BEGIN_SRC python
+  # REQUIRED: Define how to run forward pass WITHOUT perturbations (for eval)
+  # Input x has shape (batch_size, input_dim) -- NO population dimension
+  def forward_clean(x, params):
+      """Standard forward pass for evaluation."""
+      h = torch.tanh(x @ params['layer1.weight'].T + params['layer1.bias'])
+      out = h @ params['layer2.weight'].T + params['layer2.bias']
+      return out
+#+END_SRC
+
+**** 4. Fitness Function
+
+You must define how to convert model outputs to a *scalar fitness per population member*. Higher fitness = better.
+
+#+BEGIN_SRC python
+  # REQUIRED: Map model outputs to fitness scores
+  # Input: logits with shape (population_size, batch_size, output_dim)
+  # Output: fitness with shape (population_size,) -- one scalar per population member
+
+  # For CLASSIFICATION (supervised learning):
+  def compute_classification_fitness(logits, labels):
+      """Negative cross-entropy (higher = better)."""
+      log_probs = torch.log_softmax(logits, dim=-1)
+      # labels: (batch,) -> expand to (pop, batch)
+      labels_exp = labels.unsqueeze(0).expand(logits.shape[0], -1)
+      nll = -torch.gather(log_probs, 2, labels_exp.unsqueeze(-1)).squeeze(-1)
+      loss_per_pop = nll.mean(dim=-1)  # Average over batch
+      return -loss_per_pop  # Negate: lower loss = higher fitness
+
+  # For REINFORCEMENT LEARNING:
+  def compute_rl_fitness(episode_returns):
+      """Total episode return (higher = better)."""
+      return episode_returns  # Shape: (population_size,)
+#+END_SRC
+
+*** API Reference
+
+#+BEGIN_SRC python
+  from hyperscalees.torch.fncl.eggroll_fncl import (
+      get_weight_shapes,        # params -> dict of shapes
+      generate_perturbations,   # shapes -> perturbations dict
+      perturbed_forward,        # batched matmul with noise (for linear layers)
+      perturbed_conv2d,         # batched conv2d with noise (for conv layers)
+      compute_gradients,        # fitnesses + perts -> gradient dict
+      update_params,            # in-place SGD update
+      normalize_fitnesses,      # rank-normalize fitnesses (recommended)
+  )
+
+  # Step 1: Get shapes from your params dict
+  shapes = get_weight_shapes(params)
+  # -> {'layer1.weight': (256, 784), 'layer2.weight': (10, 256), ...}
+
+  # Step 2: Generate perturbations (call ONCE per epoch)
+  gen = torch.Generator(device="cuda").manual_seed(seed)
+  perts = generate_perturbations(shapes, population_size, rank, sigma, gen, dtype)
+  # -> {'layer1.weight': {'U': (pop, rank, 256), 'V': (pop, rank, 784)}, ...}
+
+  # Step 3: Run perturbed forward (inside your forward_perturbed function)
+  out = perturbed_forward(x, W, b, perts, 'layer_key')
+  # x: (pop, batch, in) -> out: (pop, batch, out)
+
+  # Step 4: Compute fitness and normalize
+  fitnesses = your_fitness_function(outputs)  # -> (population_size,)
+  fitnesses = normalize_fitnesses(fitnesses)  # Rank-based normalization
+
+  # Step 5: Compute gradients from fitnesses
+  grads = compute_gradients(fitnesses, perts, population_size)
+  # -> {'layer1.weight': grad_tensor, 'layer2.weight': grad_tensor, ...}
+
+  # Step 6: Update params in-place
+  update_params(params, grads, lr)
+#+END_SRC
+
+*** Training Loop Template
+
+#+BEGIN_SRC python
+  # ========== SETUP ==========
+  params = {...}  # Your param dict
+  shapes = get_weight_shapes(params)
+
+  # ========== TRAINING LOOP ==========
+  for epoch in range(max_epochs):
+      # 1. Generate perturbations for this epoch
+      gen = torch.Generator(device="cuda").manual_seed(seed + epoch)
+      perts = generate_perturbations(shapes, pop_size, rank, sigma, gen, dtype)
+      
+      # 2. Get input data
+      #    - RL: observations from environment
+      #    - SL: sample a mini-batch (IMPORTANT: sample NEW batch each epoch!)
+      x = get_batch()  # Shape: (batch, input_dim)
+      
+      # 3. Expand for population: (batch, in) -> (pop, batch, in)
+      x_pop = x.unsqueeze(0).expand(pop_size, -1, -1)
+      
+      # 4. Run perturbed forward
+      outputs = forward_perturbed(x_pop, params, perts)
+      
+      # 5. Compute fitness (one scalar per population member)
+      fitnesses = compute_fitness(outputs, targets)  # -> (pop_size,)
+      fitnesses = normalize_fitnesses(fitnesses)
+      
+      # 6. Compute ES gradients and update
+      grads = compute_gradients(fitnesses, perts, pop_size)
+      update_params(params, grads, lr)
+      
+      # 7. (Optional) Decay sigma for stability
+      sigma *= sigma_decay
+      
+      # 8. (Optional) Evaluate on clean forward
+      with torch.no_grad():
+          eval_out = forward_clean(test_x, params)
+#+END_SRC
+
+*** Important Notes for Supervised Learning
+
+For supervised learning experiments, you *MUST* sample a *new mini-batch every epoch*:
+
+#+BEGIN_SRC python
+  # CORRECT: Stochastic sampling each epoch
+  for epoch in range(max_epochs):
+      idx = torch.randint(0, len(train_data), (batch_size,))
+      batch_x = train_data[idx]  # NEW random batch each epoch
+      batch_y = train_labels[idx]
+      # ... rest of training loop
+
+  # WRONG: Using the same batch every epoch
+  batch_x = train_data[:batch_size]  # DON'T DO THIS - will overfit to this batch
+#+END_SRC
+
+This is crucial because:
+1. ES uses the batch to estimate fitness
+2. Using the same batch overfits the perturbation signal to that batch
+3. Stochastic sampling provides generalization
+
+*** Recipe: CartPole MLP (Reinforcement Learning)
+
+#+BEGIN_SRC python
+  from hyperscalees.torch.fncl.eggroll_fncl import (
+      EggrollConfig, get_weight_shapes, generate_perturbations,
+      perturbed_forward, compute_gradients, update_params, normalize_fitnesses
+  )
+
+  # ========== MODEL DEFINITION ==========
+  params = {
+      'layer1.weight': torch.randn(256, 4, device="cuda") * 0.1,   # obs_dim -> hidden
+      'layer2.weight': torch.randn(2, 256, device="cuda") * 0.1,  # hidden -> actions
+  }
+  shapes = get_weight_shapes(params)
+
+  # ========== FORWARD FUNCTIONS ==========
+  def forward_perturbed(obs, params, perts):
+      """Forward with ES perturbations. obs: (pop, batch, 4)"""
+      h = torch.tanh(perturbed_forward(obs, params['layer1.weight'], None, perts, 'layer1.weight'))
+      return perturbed_forward(h, params['layer2.weight'], None, perts, 'layer2.weight')
+
+  def forward_clean(obs, params):
+      """Clean forward for evaluation. obs: (batch, 4)"""
+      h = torch.tanh(obs @ params['layer1.weight'].T)
+      return h @ params['layer2.weight'].T
+
+  # ========== FITNESS FUNCTION (RL) ==========
+  def compute_fitness(logits, env):
+      """Run episodes, return total rewards per population member."""
+      actions = logits.argmax(dim=-1)
+      # ... run env steps, accumulate rewards ...
+      return episode_returns  # (population_size,)
+
+  # ========== TRAINING LOOP ==========
+  for epoch in range(max_epochs):
+      perts = generate_perturbations(shapes, pop_size, rank, sigma, gen, dtype)
+      
+      # Collect trajectories
+      obs = env.reset()
+      obs_t = obs.unsqueeze(0).expand(pop_size, -1, -1)
+      logits = forward_perturbed(obs_t, params, perts)
+      
+      # Compute fitness and update
+      fitnesses = compute_fitness(logits, env)
+      fitnesses = normalize_fitnesses(fitnesses)
+      grads = compute_gradients(fitnesses, perts, pop_size)
+      update_params(params, grads, lr)
+#+END_SRC
+
+*** Recipe: MNIST MLP (Supervised Learning)
+
+#+BEGIN_SRC python
+  # ========== MODEL DEFINITION ==========
+  params = {
+      'layer1.weight': torch.randn(256, 784, device="cuda") * 0.1,
+      'layer1.bias': torch.zeros(256, device="cuda"),
+      'layer2.weight': torch.randn(10, 256, device="cuda") * 0.1,
+      'layer2.bias': torch.zeros(10, device="cuda"),
+  }
+  shapes = get_weight_shapes(params)
+
+  # ========== FORWARD FUNCTIONS ==========
+  def forward_perturbed(x, params, perts):
+      """x: (pop, batch, 784) -> (pop, batch, 10)"""
+      h = torch.tanh(perturbed_forward(x, params['layer1.weight'], 
+                                       params['layer1.bias'], perts, 'layer1.weight'))
+      return perturbed_forward(h, params['layer2.weight'], 
+                               params['layer2.bias'], perts, 'layer2.weight')
+
+  def forward_clean(x, params):
+      """x: (batch, 784) -> (batch, 10)"""
+      h = torch.tanh(x @ params['layer1.weight'].T + params['layer1.bias'])
+      return h @ params['layer2.weight'].T + params['layer2.bias']
+
+  # ========== FITNESS FUNCTION (Classification) ==========
+  def compute_classification_fitness(logits, labels):
+      """Negative cross-entropy loss (higher = better)."""
+      log_probs = torch.log_softmax(logits, dim=-1)
+      labels_exp = labels.unsqueeze(0).expand(logits.shape[0], -1)
+      nll = -torch.gather(log_probs, 2, labels_exp.unsqueeze(-1)).squeeze(-1)
+      return -nll.mean(dim=-1)  # (population_size,)
+
+  # ========== TRAINING LOOP (Stochastic Sampling) ==========
+  for epoch in range(max_epochs):
+      # Sample NEW mini-batch each epoch (crucial for SL generalization)
+      idx = torch.randint(0, len(train_imgs), (batch_size,), device="cuda")
+      batch_imgs = train_imgs[idx]
+      batch_labels = train_labels[idx]
+      
+      perts = generate_perturbations(shapes, pop_size, rank, sigma, gen, dtype)
+      
+      # Expand batch for population: (batch, 784) -> (pop, batch, 784)
+      x = batch_imgs.unsqueeze(0).expand(pop_size, -1, -1)
+      logits = forward_perturbed(x, params, perts)
+      
+      fitnesses = compute_classification_fitness(logits, batch_labels)
+      fitnesses = normalize_fitnesses(fitnesses)
+      grads = compute_gradients(fitnesses, perts, pop_size)
+      update_params(params, grads, lr)
+      
+      # Decay sigma for stability
+      sigma *= sigma_decay
+#+END_SRC
+
+*** Recipe: MNIST CNN (Conv Layers)
+
+EGGROLL can perturb *any* architecture including conv layers. Conv weights are flattened to 2D =(C_out, C_in*k*k)= for perturbation:
+
+#+BEGIN_SRC python
+  # ========== MODEL DEFINITION ==========
+  params = {
+      'conv1.weight': torch.randn(16, 1, 3, 3, device="cuda") * 0.1,   # 1->16 channels, 3x3
+      'conv2.weight': torch.randn(32, 16, 3, 3, device="cuda") * 0.1,  # 16->32 channels, 3x3
+      'fc.weight': torch.randn(10, 32*7*7, device="cuda") / math.sqrt(32*7*7),
+      'fc.bias': torch.zeros(10, device="cuda"),
+  }
+  shapes = get_weight_shapes(params)  # Conv weights flattened: (16, 9), (32, 144), ...
+
+  # ========== FORWARD FUNCTIONS ==========
+  def forward_perturbed(x, params, perts):
+      """x: (batch, 1, 28, 28) -> (pop, batch, 10)"""
+      # Conv1 + ReLU + Pool
+      x = perturbed_conv2d(x, params['conv1.weight'], perts, 'conv1.weight', padding=1)
+      x = torch.relu(x)
+      # max_pool2d needs 4D: reshape (pop, batch, C, H, W) -> (pop*batch, C, H, W)
+      pop, batch = x.shape[0], x.shape[1]
+      x = x.reshape(pop * batch, *x.shape[2:])
+      x = F.max_pool2d(x, 2)
+      x = x.reshape(pop, batch, *x.shape[1:])
+      
+      # Conv2 + ReLU + Pool
+      x = perturbed_conv2d(x, params['conv2.weight'], perts, 'conv2.weight', padding=1)
+      x = torch.relu(x)
+      x = x.reshape(pop * batch, *x.shape[2:])
+      x = F.max_pool2d(x, 2)
+      x = x.reshape(pop, batch, *x.shape[1:])
+      
+      # Flatten + FC
+      x = x.reshape(pop, batch, -1)
+      return perturbed_forward(x, params['fc.weight'], params['fc.bias'], perts, 'fc.weight')
+
+  def forward_clean(x, params):
+      """x: (batch, 1, 28, 28) -> (batch, 10)"""
+      x = F.conv2d(x, params['conv1.weight'], padding=1)
+      x = torch.relu(F.max_pool2d(x, 2))
+      x = F.conv2d(x, params['conv2.weight'], padding=1)
+      x = torch.relu(F.max_pool2d(x, 2))
+      x = x.flatten(1)
+      return x @ params['fc.weight'].T + params['fc.bias']
+#+END_SRC
+
+*** Running Experiments
+
+#+BEGIN_SRC bash
+  # Run all Torch experiments
+  cd HyperscaleES
+  uv run python -m src.hyperscalees.torch.fncl.eggroll_fncl --experiment all
+
+  # Individual experiments
+  uv run python -m src.hyperscalees.torch.fncl.eggroll_fncl --experiment cartpole
+  uv run python -m src.hyperscalees.torch.fncl.eggroll_fncl --experiment mnist
+  uv run python -m src.hyperscalees.torch.fncl.eggroll_fncl --experiment mnist_cnn
+
+  # Profile Torch vs JAX head-to-head
+  uv run python -m src.hyperscalees.torch.fncl.eggroll_fncl --experiment profile
+
+  # Memory scaling tests
+  uv run python -m src.hyperscalees.torch.fncl.eggroll_fncl --experiment hyperscale
+#+END_SRC
+
+** JAX EGGROLL (Original API)
+
+The JAX implementation uses a more structured OOP approach with Noiser and Model classes.
+
+*** Core Ideas
 
 The two core components of the codebase are the Noiser (src/hyperscalees/noiser) and the Model (src/hyperscalees/models). We strongly recommend reading and running the [[https://colab.research.google.com/github/ESHyperscale/HyperscaleES/blob/main/eggroll.ipynb][eggroll.ipynb]] notebook to see the full implementation and worked out example.
 
-*** Noiser
+**** Noiser
 
 To initialize the noiser, call Noiser.init_noiser(params, sigma, lr, [additional keyword arguments for noiser]). This returns "frozen_noiser_params" and "noiser_params" where "frozen_noiser_params" are static aspects of the model (such as a solver of an optax optimizer) and "noiser_params" are dynamic aspects of the model (like the optimizer state, sigma, lr, etc.).
 
@@ -48,7 +405,7 @@ The noiser is responsible for perturbing the model with noise. The "get_noisy_st
 
 The noiser is also responsible for updating the model in the context of evolution. The "convert_fitnesses" function takes raw scores (one per generation thread) and optionally takes num_episodes_list (which gives the number of episodes that are averaged to get this fitness value; this may be helpful in the context of classic RL). The "do_update" function gives updated noiser_params and the updated parameters of the model.
 
-*** Model
+**** Model
 
 A model class defines how to initialize parameters (and auxiliary components necessary for evolution) and the forward function. To initialize a model, call Model.rand_init(key, [model-specific parameters]), which will returns frozen_params (static aspects of the model), params (standard parameters), scan_map (defining which aspects of the model are scanned over so that different keys are created for sub-parameters), and es_map (defining if a parameter should be treated as a regular PARAM, MM_PARAM, EMB_PARAM, or EXCLUDED from evolution).
 
@@ -59,3 +416,11 @@ To call the model, you can run Model.forward(noiser, frozen_noiser_params, noise
 *** Minimal Usage Example
 
 See tests/end_to_end_test.py for a fully worked out example of getting an MLP to always predict the number 2.
+
+** Usage
+
+To run the LLM experiments, run the following program. You can check the file for command-line arguments. 
+
+#+BEGIN_SRC
+  python -m llm_experiments.general_do_evolution
+#+END_SRC

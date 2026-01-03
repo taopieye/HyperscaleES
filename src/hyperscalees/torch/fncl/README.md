@@ -1,21 +1,44 @@
 # Functional EGGROLL (Torch)
 
-> **Train neural networks without backpropagation.** EGGROLL uses evolution strategies with low-rank perturbations to estimate gradients—achieving **1.3M+ steps/sec** on CartPole and competitive accuracy on MNIST in seconds.
+> **Train neural networks without backpropagation.** EGGROLL (**E**volution **G**uided **G**eneral **O**ptimization via **L**ow-rank **L**earning) uses evolution strategies with low-rank perturbations to estimate gradients—achieving **1.3M+ steps/sec** on CartPole and competitive accuracy on MNIST in seconds.
+
+## Understanding EGGROLL
+
+**New to the codebase?** The [test suite](tests/test_core.py) serves as living documentation—each test class verifies a key mathematical property from the paper with explanatory docstrings:
+
+| Test Class | What It Proves |
+|------------|----------------|
+| `TestLowRankStructure` | Perturbations are rank-r; memory savings are 48x for typical layers |
+| `TestForwardEquivalence` | Efficient `x @ B @ A.T` equals explicit `x @ (A @ B.T)` |
+| `TestAntitheticSampling` | Thread pairs have opposite perturbations for variance reduction |
+| `TestHighRankAccumulation` | Sum of low-rank perturbations → high-rank update |
+| `TestESGradient` | Gradient formula is correct; updates favor high-fitness perturbations |
+| `TestEggrollStep` | Full pipeline: `W_new = W_old + lr * grad` verified exactly |
+
+```bash
+# Run tests with documentation output
+pytest src/hyperscalees/torch/fncl/tests/ -v -s
+```
+
+---
 
 ## Why EGGROLL?
+
+EGGROLL is an evolution strategies (ES) algorithm designed to scale backprop-free optimization to **large population sizes** for modern neural networks. The key innovation: instead of sampling full-rank perturbation matrices $E \in \mathbb{R}^{m \times n}$, EGGROLL samples low-rank factors $A \in \mathbb{R}^{m \times r}$ and $B \in \mathbb{R}^{n \times r}$ (with $r \ll \min(m, n)$) and forms $E = \frac{1}{\sqrt{r}} A B^\top$.
 
 | Problem with Backprop | EGGROLL Solution |
 |-----------------------|------------------|
 | Requires differentiable loss | Works with **any** fitness function (reward, accuracy, custom metric) |
 | Sequential layer-by-layer computation | **Embarrassingly parallel** across population |
-| Memory-hungry for large models | **O(r(m+n))** memory per layer vs O(m×n) for full ES |
-| Hard to debug gradients | **Black-box**: just evaluate fitness, get gradients |
+| Memory-hungry for large models | **O(r(m+n))** auxiliary storage per layer vs O(m×n) for full ES |
+| Gradients vanish/explode in long-horizon settings | Population-based smoothing tolerates discontinuities |
+
+**Important:** While each perturbation is low-rank, the **overall EGGROLL update is high-rank**—it's rank $\min(Nr, m, n)$ since it averages across $N$ population members. This means you get the memory benefits of low-rank without sacrificing expressiveness.
 
 **Real-world wins:**
 - ✅ **RL without reward shaping**: Direct policy optimization from sparse rewards
 - ✅ **Non-differentiable objectives**: Optimize BLEU, accuracy, latency—anything measurable
-- ✅ **Hyperparameter-free architecture search**: No learning rate scheduling needed
-- ✅ **Hardware failures? No problem**: Population-based = natural fault tolerance
+- ✅ **Pure integer training**: No gradients means no special care for low-precision dtypes
 
 ---
 
@@ -55,23 +78,73 @@ Solved at epoch 12!
 
 ---
 
-## The Core Idea (30-second version)
+## The Core Idea
 
 Instead of backprop, EGGROLL:
 
-1. **Generates 2048 slightly different versions** of your network (via low-rank noise)
+1. **Generates N slightly different versions** of your network (via low-rank noise: $\frac{\sigma}{\sqrt{r}} A_i B_i^\top$ per member)
 2. **Evaluates all of them in parallel** on your task
 3. **Computes a gradient estimate** from which versions did best
 4. **Updates weights** in the direction of better performance
 
-The magic: **low-rank perturbations** make this 100x more memory-efficient than naive ES.
+The magic: **low-rank perturbations** make this 100x more memory-efficient than naive ES, while the aggregate update remains high-rank.
 
 ```python
 # The fundamental operation (what you need to know):
 perturbed_output = perturbed_linear(x, W, b, A_scaled, B)
-# Equivalent to: x @ (W + A @ B.T).T + b
-# But computed efficiently with O(rank) overhead instead of O(params)
+# Computes: x @ W.T + b + x @ B @ A.T
+# Never materializes W + A @ B.T — that's the key memory savings!
 ```
+
+---
+
+## Quick Start: From PyTorch Module to EGGROLL
+
+The fastest way to get started is to define your model with standard PyTorch, then auto-convert:
+
+```python
+import torch
+import torch.nn as nn
+from hyperscalees.torch.fncl.core import (
+    EggrollConfig, get_params_dict, get_weight_shapes, make_perturbed_forward_fn,
+    generate_perturbations, eggroll_step
+)
+
+# 1. Define your model with standard PyTorch
+model = nn.Sequential(
+    nn.Linear(4, 256),
+    nn.Tanh(),
+    nn.Linear(256, 2),
+)
+
+# 2. Auto-convert to EGGROLL format
+params = get_params_dict(model)                      # Extract params dict
+shapes = get_weight_shapes(params)                   # Get shapes for perturbation gen
+forward, forward_eval = make_perturbed_forward_fn(model)  # Auto-gen forward functions!
+
+# 3. Training loop
+config = EggrollConfig(population_size=2048, rank=4, sigma=0.1, lr=0.1,
+                       lr_decay=0.999, sigma_decay=0.999)
+current_lr, current_sigma = config.lr, config.sigma
+
+for epoch in range(100):
+    gen = torch.Generator(device="cuda").manual_seed(42 + epoch)
+    perts = generate_perturbations(shapes, config.population_size, config.rank, 
+                                   current_sigma, gen, config.dtype)
+    
+    # Forward pass (perturbations applied to all Linear layers)
+    output = forward(x, params, perts)
+    
+    # One-liner EGGROLL step: normalize -> gradients -> update -> decay
+    current_lr, current_sigma = eggroll_step(
+        params, your_fitness_fn(output), perts, current_lr, current_sigma, config
+    )
+
+# 4. Inference (no perturbations)
+output = forward_eval(x, params)
+```
+
+**Note:** `make_perturbed_forward_fn` uses `torch.fx` to trace your model. It works great for Sequential models and simple feedforward nets. For complex architectures with dynamic control flow, you'll need to write the forward functions manually (see recipes below).
 
 ---
 
@@ -85,58 +158,57 @@ These are **copy-paste ready** examples that match the proven implementations in
 
 ```python
 import torch
+import torch.nn as nn
 import gymnasium as gym
 from hyperscalees.torch.fncl.core import (
-    get_weight_shapes, generate_perturbations, compute_gradients,
-    update_params, perturbed_forward, normalize_fitnesses
+    EggrollConfig, get_params_dict, get_weight_shapes, make_perturbed_forward_fn,
+    generate_perturbations, eggroll_step
 )
 
-# ============ HYPERPARAMETERS (proven to work) ============
-population_size = 2048   # Number of parallel policy variants
-rank = 4                 # Low-rank perturbation rank
-sigma = 0.2              # Noise scale (will decay)
-lr = 0.1                 # Learning rate
-sigma_decay = 0.999      # Decay sigma each epoch
-lr_decay = 0.9995        # Decay LR each epoch
-max_epochs = 300         # Max training epochs
-seed = 42
+# ============ CONFIG ============
+config = EggrollConfig(
+    population_size=2048,  # Number of parallel policy variants
+    rank=4,                # Low-rank perturbation rank
+    sigma=0.2,             # Noise scale (will decay)
+    lr=0.1,                # Learning rate
+    sigma_decay=0.999,     # Decay sigma each epoch
+    lr_decay=0.9995,       # Decay LR each epoch
+    max_epochs=300,        # Max training epochs
+    seed=42,
+)
 
 # ============ MODEL DEFINITION ============
-# 2-layer MLP: 4 (obs) -> 256 (hidden, tanh) -> 2 (actions)
-params = {
-    'layer1.weight': torch.randn(256, 4, device="cuda") * 0.1,
-    'layer1.bias': torch.zeros(256, device="cuda"),
-    'layer2.weight': torch.randn(2, 256, device="cuda") * 0.1,
-    'layer2.bias': torch.zeros(2, device="cuda"),
-}
-shapes = get_weight_shapes(params)  # Auto-detect which params to perturb
+model = nn.Sequential(
+    nn.Linear(4, 256),
+    nn.Tanh(),
+    nn.Linear(256, 2),
+)
+# Initialize with small weights
+for m in model.modules():
+    if isinstance(m, nn.Linear):
+        nn.init.normal_(m.weight, std=0.1)
+        nn.init.zeros_(m.bias)
 
-# ============ FORWARD FUNCTIONS ============
-def forward(obs, params, perts):
-    """Forward pass with ES perturbations applied (training)."""
-    h = torch.tanh(perturbed_forward(obs, params['layer1.weight'], 
-                                     params['layer1.bias'], perts, 'layer1.weight'))
-    return perturbed_forward(h, params['layer2.weight'], 
-                             params['layer2.bias'], perts, 'layer2.weight')
-
-def forward_eval(obs, params):
-    """Forward pass without perturbations (evaluation/inference)."""
-    h = torch.tanh(obs @ params['layer1.weight'].T + params['layer1.bias'])
-    return h @ params['layer2.weight'].T + params['layer2.bias']
+# ============ CONVERT TO EGGROLL FORMAT ============
+params = get_params_dict(model)                       # Extract params to dict
+shapes = get_weight_shapes(params)                    # Get shapes for perturbations
+forward, forward_eval = make_perturbed_forward_fn(model)  # Auto-gen forward functions
 
 # ============ TRAINING LOOP ============
-envs = gym.make_vec("CartPole-v1", num_envs=population_size)
-torch.manual_seed(seed)
+envs = gym.make_vec("CartPole-v1", num_envs=config.population_size)
+torch.manual_seed(config.seed)
+current_lr, current_sigma = config.lr, config.sigma
 
-for epoch in range(max_epochs):
+for epoch in range(config.max_epochs):
     # 1. Generate perturbations for ALL weights at once
-    gen = torch.Generator(device="cuda").manual_seed(seed + epoch * 1000)
-    perts = generate_perturbations(shapes, population_size, rank, sigma, gen, torch.float32)
+    gen = torch.Generator(device="cuda").manual_seed(config.seed + epoch * 1000)
+    perts = generate_perturbations(shapes, config.population_size, config.rank, 
+                                   current_sigma, gen, config.dtype)
     
     # 2. Run episodes (all 2048 policies in parallel!)
     obs, _ = envs.reset(seed=epoch)
-    episode_returns = torch.zeros(population_size, device="cuda")
-    dones = torch.zeros(population_size, dtype=torch.bool, device="cuda")
+    episode_returns = torch.zeros(config.population_size, device="cuda")
+    dones = torch.zeros(config.population_size, dtype=torch.bool, device="cuda")
     
     for step in range(500):
         obs_t = torch.as_tensor(obs, device="cuda", dtype=torch.float32)
@@ -150,16 +222,12 @@ for epoch in range(max_epochs):
         if dones.all():
             break
     
-    # 3. ES update: compute gradient from fitnesses
-    fitnesses = normalize_fitnesses(episode_returns)
-    grads = compute_gradients(fitnesses, perts, population_size)
-    update_params(params, grads, lr)
+    # 3. ES update: single-line EGGROLL step with decay!
+    current_lr, current_sigma = eggroll_step(
+        params, episode_returns, perts, current_lr, current_sigma, config
+    )
     
-    # 4. Decay hyperparameters
-    lr *= lr_decay
-    sigma *= sigma_decay
-    
-    # 5. Check if solved
+    # 4. Check if solved
     mean_ret = episode_returns.mean().item()
     if mean_ret >= 475:
         print(f"Solved at epoch {epoch}!")
@@ -174,79 +242,77 @@ envs.close()
 
 ```python
 import torch
+import torch.nn as nn
 import numpy as np
 from hyperscalees.torch.fncl.core import (
-    get_weight_shapes, generate_perturbations, compute_gradients,
-    update_params, perturbed_forward, normalize_fitnesses,
+    EggrollConfig, get_params_dict, get_weight_shapes, make_perturbed_forward_fn,
+    generate_perturbations, eggroll_step,
 )
 from hyperscalees.torch.fncl.recipes import (
     load_mnist_flat, compute_classification_fitness
 )
 
-# ============ HYPERPARAMETERS (proven to work) ============
-population_size = 4096   # Larger population for SL
-rank = 4
-sigma = 0.15
-lr = 0.1
-sigma_decay = 0.999
-max_epochs = 100
-batch_size = 256         # Mini-batch size per ES step
-seed = 42
+# ============ CONFIG (proven to work) ============
+config = EggrollConfig(
+    population_size=4096,  # Larger population for SL
+    rank=4,
+    sigma=0.15,
+    lr=0.1,
+    sigma_decay=0.999,
+    lr_decay=1.0,          # No LR decay for MNIST
+    max_epochs=100,
+    batch_size=256,        # Mini-batch size per ES step
+    seed=42,
+)
 
 # ============ DATA LOADING ============
-train_imgs, train_labels, test_imgs, test_labels = load_mnist_flat(torch.float32)
+train_imgs, train_labels, test_imgs, test_labels = load_mnist_flat(config.dtype)
 # train_imgs: (60000, 784), test_imgs: (10000, 784)
 
-# ============ MODEL DEFINITION ============
-# 2-layer MLP: 784 -> 256 (tanh) -> 10
-params = {
-    'layer1.weight': torch.randn(256, 784, device="cuda") * 0.1,
-    'layer1.bias': torch.zeros(256, device="cuda"),
-    'layer2.weight': torch.randn(10, 256, device="cuda") * 0.1,
-    'layer2.bias': torch.zeros(10, device="cuda"),
-}
+# ============ MODEL DEFINITION (standard PyTorch!) ============
+model = nn.Sequential(
+    nn.Linear(784, 256),
+    nn.Tanh(),
+    nn.Linear(256, 10),
+)
+# Initialize with small weights
+for m in model.modules():
+    if isinstance(m, nn.Linear):
+        nn.init.normal_(m.weight, std=0.1)
+        nn.init.zeros_(m.bias)
+
+# ============ CONVERT TO EGGROLL FORMAT ============
+params = get_params_dict(model)
 shapes = get_weight_shapes(params)
-
-# ============ FORWARD FUNCTIONS ============
-def forward(x, params, perts):
-    """x: (pop, batch, 784) -> (pop, batch, 10) — training with perturbations"""
-    h = torch.tanh(perturbed_forward(x, params['layer1.weight'], 
-                                     params['layer1.bias'], perts, 'layer1.weight'))
-    return perturbed_forward(h, params['layer2.weight'], 
-                             params['layer2.bias'], perts, 'layer2.weight')
-
-def forward_eval(x, params):
-    """x: (batch, 784) -> (batch, 10) — evaluation/inference"""
-    h = torch.tanh(x @ params['layer1.weight'].T + params['layer1.bias'])
-    return h @ params['layer2.weight'].T + params['layer2.bias']
+forward, forward_eval = make_perturbed_forward_fn(model)
 
 # ============ TRAINING LOOP ============
-torch.manual_seed(seed)
-rng = np.random.default_rng(seed)
+torch.manual_seed(config.seed)
+rng = np.random.default_rng(config.seed)
+current_lr, current_sigma = config.lr, config.sigma
 
-for epoch in range(max_epochs):
+for epoch in range(config.max_epochs):
     # 1. Sample random mini-batch
-    idx = torch.tensor(rng.integers(0, len(train_imgs), size=batch_size), device="cuda")
+    idx = torch.tensor(rng.integers(0, len(train_imgs), size=config.batch_size), device="cuda")
     batch_imgs = train_imgs[idx]      # (batch, 784)
     batch_labels = train_labels[idx]  # (batch,)
     
     # 2. Generate perturbations
-    gen = torch.Generator(device="cuda").manual_seed(seed + epoch * 1000)
-    perts = generate_perturbations(shapes, population_size, rank, sigma, gen, torch.float32)
+    gen = torch.Generator(device="cuda").manual_seed(config.seed + epoch * 1000)
+    perts = generate_perturbations(shapes, config.population_size, config.rank, 
+                                   current_sigma, gen, config.dtype)
     
     # 3. Forward: expand batch for population
-    x = batch_imgs.unsqueeze(0).expand(population_size, -1, -1)  # (pop, batch, 784)
+    x = batch_imgs.unsqueeze(0).expand(config.population_size, -1, -1)  # (pop, batch, 784)
     logits = forward(x, params, perts)  # (pop, batch, 10)
     
     # 4. Compute fitness (negative cross-entropy loss)
     fitnesses = compute_classification_fitness(logits, batch_labels)
-    fitnesses = normalize_fitnesses(fitnesses)
     
-    # 5. ES update
-    grads = compute_gradients(fitnesses, perts, population_size)
-    update_params(params, grads, lr)
-    
-    sigma *= sigma_decay
+    # 5. Single-line EGGROLL step with decay!
+    current_lr, current_sigma = eggroll_step(
+        params, fitnesses, perts, current_lr, current_sigma, config
+    )
     
     # 6. Evaluate on full test set
     with torch.no_grad():
@@ -339,6 +405,21 @@ def forward_eval(x, params):
 
 ## API Reference
 
+### Module Conversion
+
+Convert standard PyTorch modules to EGGROLL format automatically.
+
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `get_params_dict(module, device, dtype)` | Extract params from nn.Module | `params = get_params_dict(model)` |
+| `make_perturbed_forward_fn(module)` | Auto-generate forward functions | `fwd, fwd_eval = make_perturbed_forward_fn(model)` |
+
+**`get_params_dict`** copies all parameters to the specified device (default: CUDA) and returns them as a flat dict with PyTorch's naming convention (`'0.weight'`, `'fc.bias'`, etc.).
+
+**`make_perturbed_forward_fn`** uses `torch.fx` to trace your module and automatically replaces `nn.Linear` layers with `perturbed_forward` calls. Returns `(forward_fn, forward_eval_fn)`. Limitations:
+- Only handles `nn.Linear` (not Conv2d—use `perturbed_conv2d` manually)
+- Module must be traceable by `torch.fx` (no dynamic control flow)
+
 ### Dict-Based API (Recommended)
 
 Manages perturbations and gradients across multiple weight matrices via string keys.
@@ -349,6 +430,7 @@ Manages perturbations and gradients across multiple weight matrices via string k
 | `generate_perturbations(shapes, pop, rank, sigma, gen, dtype)` | Generate all perturbations in one call | `perts = generate_perturbations(shapes, 2048, 4, 0.1, gen, torch.float32)` |
 | `perturbed_forward(x, W, b, perts, key)` | Perturbed linear layer | `h = perturbed_forward(x, W, b, perts, 'layer1.weight')` |
 | `perturbed_conv2d(x, W, perts, key, padding)` | Perturbed conv layer (in recipes.py) | `h = perturbed_conv2d(x, W, perts, 'conv1.weight', padding=1)` |
+| `eggroll_step(params, fitnesses, perts, lr, sigma, config)` | **One-liner ES update** with decay from config | `lr, sigma = eggroll_step(params, f, perts, lr, sigma, config)` |
 | `compute_gradients(fitnesses, perts, pop)` | Compute all gradients at once | `grads = compute_gradients(f, perts, pop)` |
 | `update_params(params, grads, lr)` | Update all params in-place | `update_params(params, grads, 0.1)` |
 | `normalize_fitnesses(fitnesses)` | Zero-mean, unit-variance normalization | `f = normalize_fitnesses(episode_returns)` |
@@ -359,34 +441,33 @@ For when you need fine-grained control over each layer.
 
 | Function | Purpose |
 |----------|---------|
-| `generate_lowrank_perturbations(pop, out_dim, in_dim, rank, sigma, gen, dtype)` | Generate A, B for one weight matrix |
-| `perturbed_linear(x, W, b, A_scaled, B)` | Apply perturbed linear to input |
-| `apply_lowrank_perturbation(x, B, A_scaled)` | Just the perturbation (no base W) |
-| `compute_es_gradient(fitnesses, A_scaled, B, pop)` | Gradient for one weight matrix |
+| `generate_lowrank_perturbations(pop, out_dim, in_dim, rank, sigma, gen, dtype)` | Generate antithetic A, B for one weight matrix |
+| `perturbed_linear(x, W, b, A_scaled, B)` | Apply perturbed linear: `x @ W.T + b + x @ B @ A.T` |
+| `apply_lowrank_perturbation(x, B, A_scaled)` | Just the perturbation term: `x @ B @ A.T` |
+| `compute_es_gradient(fitnesses, A_scaled, B, pop)` | Gradient for one weight via `einsum` |
+
+**Note:** `A_scaled` already includes the $\sigma / \sqrt{r}$ factor, so you don't need to scale it yourself.
 
 ---
 
-## Hyperparameter Guide
+### Hyperparameter Guide
 
 ### What Each Hyperparameter Does
 
 | Param | Default | Effect |
 |-------|---------|--------|
-| `population_size` | 2048 | More = smoother gradients, slower per-step. Use 2048-4096 for most tasks. |
-| `rank` | 4 | Low-rank dimension. Higher = more expressive noise, more memory. 4 works well. |
-| `sigma` | 0.1-0.2 | Noise scale. Too high = chaotic, too low = stuck. Start 0.1-0.2, decay. |
-| `lr` | 0.1 | Learning rate. ES is robust to LR—0.1 is usually fine. |
-| `sigma_decay` | 0.999 | Decay sigma each epoch for fine-tuning. |
-| `lr_decay` | 1.0 | Optional LR decay. Usually not needed. |
-| `batch_size` | 256 | Mini-batch size for SL. 64-256 works well. |
+| `population_size` | 2048 | More = smoother gradients, slower per-step. The paper uses up to 262,144 for pretraining! |
+| `rank` | 4 | Low-rank dimension. Higher = more expressive perturbations. Theory shows $O(1/r)$ convergence. |
+| `sigma` | 0.1-0.2 | Perturbation scale (before $1/\sqrt{r}$ normalization). Too high = chaotic, too low = stuck. |
+| `lr` | 0.1 | Learning rate. ES is relatively robust to LR—0.1 is a good default. |
+| `sigma_decay` | 0.999 | Decay sigma each epoch for fine-tuning toward local optima. |
+| `lr_decay` | 1.0 | Optional LR decay. Usually not needed for ES. |
+| `batch_size` | 256 | Mini-batch size for supervised learning. 64-256 works well. |
 
-### Recommended Settings by Task
+### Recommended Settings
 
 | Task | population | rank | sigma | lr | Notes |
 |------|-----------|------|-------|-----|-------|
-| CartPole | 2048 | 4 | 0.2 | 0.1 | Solves in ~12 epochs, 1M+ steps/s |
-| MNIST MLP | 4096 | 4 | 0.15 | 0.1 | ~88% acc in 100 epochs, 0.02s/epoch |
-| MNIST CNN | 2048 | 4 | 0.1 | 0.1 | ~75% acc, 0.13s/epoch (grouped conv) |
 | Custom RL | 2048-4096 | 4 | 0.1-0.3 | 0.05-0.1 | Start high sigma, decay |
 
 ---
@@ -397,27 +478,37 @@ For when you need fine-grained control over each layer.
 
 For weight matrix $W \in \mathbb{R}^{m \times n}$, the perturbation is:
 
-$$\Delta W = A \cdot B^T$$
+$$\Delta W = \frac{1}{\sqrt{r}} A \cdot B^\top$$
 
 where $A \in \mathbb{R}^{m \times r}$ and $B \in \mathbb{R}^{n \times r}$ with rank $r \ll \min(m, n)$.
 
-### ES Gradient Estimate
+The $\frac{1}{\sqrt{r}}$ scaling ensures the variance of perturbations remains bounded as rank increases. In practice, we absorb this into the sigma: `A_scaled = A * (sigma / sqrt(r))`.
 
-$$\nabla_W \approx \frac{1}{\sqrt{N}} \sum_{i=1}^{N} f_i \cdot A_i \cdot B_i^T$$
+### ES Gradient Estimate (EGGROLL Update)
+
+$$\nabla_W \approx \frac{1}{\sqrt{N}} \sum_{i=1}^{N} f_i \cdot A_i \cdot B_i^\top$$
 
 where:
 - $f_i$ = normalized fitness for population member $i$
 - $N$ = population size
-- $A_i, B_i$ = perturbation factors for member $i$
+- $A_i, B_i$ = perturbation factors for member $i$ (scaled by $\sigma / \sqrt{r}$)
 
-### Why Low-Rank?
+This matches the paper's Equation 8. Note: the gradient is computed **without materializing** $A_i B_i^\top$ — we use `einsum('nir,njr->ij', f * A, B)` to go directly from factors to gradient.
+
+### Antithetic Sampling
+
+Population members are paired: members $2k$ and $2k+1$ use opposite-sign perturbations (+A, -A). This variance reduction technique is standard in ES and halves the effective noise.
+
+### Why Low-Rank Works
+
+The EGGROLL paper proves that the low-rank gradient estimate converges to the full-rank ES gradient at rate $O(1/r)$ — much faster than the typical $O(1/\sqrt{r})$ from the central limit theorem. This fast rate comes from the symmetry of the noise distribution (odd moments vanish).
 
 | Full ES | EGGROLL |
 |---------|---------|
 | Store $N \times m \times n$ perturbations | Store $N \times (m + n) \times r$ factors |
-| For 256×784 weight, N=2048: **3.2 GB** | Same setting, rank=4: **16 MB** |
+| For 256×784 weight, N=2048: **~400 MB/layer** | Same setting, rank=4: **~17 MB/layer** |
 
-That's **200x memory reduction** with minimal loss in gradient quality.
+The update is still high-rank: averaging $N$ rank-$r$ matrices gives rank $\min(Nr, m, n)$.
 
 ---
 
@@ -425,30 +516,25 @@ That's **200x memory reduction** with minimal loss in gradient quality.
 
 ### "CUDA out of memory"
 - Reduce `population_size` (try 1024)
-- Reduce `batch_size` for SL
+- Reduce `batch_size` for supervised learning
 - Check if other processes are using GPU
 
 ### "Training doesn't converge"
-- Increase `sigma` (try 0.2-0.3)
-- Increase `population_size`
-- Check your fitness function (higher = better)
+- Increase `sigma` (try 0.2-0.3) — you need enough exploration
+- Increase `population_size` — more samples = better gradient estimate
+- Check your fitness function: **higher values must mean better** (ES maximizes)
 
 ### "Results are noisy/unstable"
-- Increase `population_size`
-- Add `sigma_decay` (0.999)
-- For SL: increase `batch_size`
-
-### "CartPole doesn't solve"
-- Make sure you're using `gymnasium` not `gym`
-- Check that envs are vectorized: `gym.make_vec(...)`
-- Verify episode returns are summed correctly
+- Increase `population_size` — the gradient variance scales as $1/N$
+- Add `sigma_decay` (0.999) to settle into local optima
+- For supervised learning: increase `batch_size` to reduce fitness variance
 
 ---
 
 ## Performance
 
-- **torch.compile:** All forward passes are JIT-compiled for JAX-parity speed
-- **Throughput:** 1M+ steps/sec on CartPole (RTX 3090)
+- **torch.compile:** All forward passes are JIT-compiled for performance
+- **Throughput:** 1M+ steps/sec on CartPole (RTX 4090)
 - **Grouped conv:** `perturbed_conv2d` uses grouped convolution for efficient batched CNN training
 - **Memory:** Population 4096 + batch 256 uses ~1-2GB VRAM for MNIST
 - **TF32 enabled:** Automatic TensorFloat32 for faster matmul on Ampere+ GPUs
@@ -462,7 +548,7 @@ The `generate_perturbations()` function uses `torch.Generator` which is **not `t
 - The forward pass dominates (95%) and IS fully compiled
 - For pop=2048, dim=256, rank=8: generation takes ~0.06ms vs ~1.3ms for forward
 
-JAX's approach (counter-based Philox PRNG) would allow fusing generation into the compiled graph and enable on-the-fly regeneration (saving memory). However, benchmarks show this adds ~40% overhead due to breaking fusion opportunities. Not worth it for sub-10M param models where memory isn't the bottleneck.
+The JAX reference implementation uses counter-based Philox PRNG (via `jax.random.fold_in`) which enables deterministic noise reconstruction without storage. This allows regenerating perturbations on-demand during the update step. The PyTorch implementation stores perturbations between forward and update for simplicity, which is fine for sub-10M param models where memory isn't the bottleneck.
 
 ---
 
@@ -471,11 +557,10 @@ JAX's approach (counter-based Philox PRNG) would allow fusing generation into th
 ```bash
 # Individual experiments
 python -m hyperscalees.torch.fncl.recipes --experiment cartpole
-python -m hyperscalees.torch.fncl.recipes --experiment mnist
+python -m hyperscalees.torch.fncl.recipes --experiment mnist_mlp
 python -m hyperscalees.torch.fncl.recipes --experiment mnist_cnn
 
 # Benchmarking
-python -m hyperscalees.torch.fncl.recipes --experiment hyperscale
 python -m hyperscalees.torch.fncl.recipes --experiment hyperscale
 
 # Run everything
@@ -490,19 +575,22 @@ python -m hyperscalees.torch.fncl.recipes --experiment all
 ```
 core.py                        # Core EGGROLL implementation
 ├── EggrollConfig              # Dataclass for hyperparameters
+├── Module Conversion
+│   ├── get_params_dict        # Extract params from nn.Module
+│   └── make_perturbed_forward_fn  # Auto-gen forward functions via torch.fx
 ├── Dict-Based API
-│   ├── get_weight_shapes      # Auto-detect perturbed weights
-│   ├── generate_perturbations # Generate all perturbations
-│   ├── perturbed_forward      # Perturbed linear layer
-│   ├── compute_gradients      # Compute all ES gradients
-│   └── update_params          # Update weights
+│   ├── get_weight_shapes      # Auto-detect perturbed weights (2D and 4D)
+│   ├── generate_perturbations # Generate A, B factors for all weights
+│   ├── perturbed_forward      # x @ W.T + b + x @ B @ A.T (never materializes A @ B.T)
+│   ├── compute_gradients      # einsum('nir,njr->ij', f*A, B) / sqrt(N)
+│   └── update_params          # Apply gradients to weights
 └── Raw Primitives
-    ├── generate_lowrank_perturbations
-    ├── perturbed_linear
-    ├── apply_lowrank_perturbation
-    ├── compute_weight_perturbation
-    ├── compute_es_gradient
-    └── normalize_fitnesses
+    ├── generate_lowrank_perturbations  # Antithetic A, B factors
+    ├── perturbed_linear                # Core: base + low-rank perturbation
+    ├── apply_lowrank_perturbation      # Just x @ B @ A.T
+    ├── compute_weight_perturbation     # Materialize A @ B.T (for conv only!)
+    ├── compute_es_gradient             # Single-weight ES gradient
+    └── normalize_fitnesses             # Zero-mean, unit-variance
 
 recipes.py                     # Experiments & recipes
 ├── GPU Utilities
@@ -513,10 +601,21 @@ recipes.py                     # Experiments & recipes
 │   ├── load_mnist_flat
 │   └── load_mnist_2d
 ├── Experiment Helpers
-│   ├── compute_classification_fitness
-│   └── perturbed_conv2d       # Perturbed conv layer (grouped conv)
+│   ├── compute_classification_fitness  # -cross_entropy (higher = better)
+│   └── perturbed_conv2d                # Grouped conv for batched CNN
 └── Experiments
-    ├── main()                 # CartPole
-    ├── main_mnist()           # MNIST MLP
-    └── main_mnist_cnn()       # MNIST CNN
+    ├── cartpole()
+    ├── mnist_mlp()
+    └── mnist_cnn()
+
+# Reference: JAX implementation at src/hyperscalees/noiser/eggroll.py
+# Paper: EGGROLL.pdf at project root
 ```
+
+---
+
+## References
+
+- **Paper:** Sarkar et al., "Evolution Strategies at the Hyperscale" — see `EGGROLL.pdf` at project root
+- **JAX Reference Implementation:** `src/hyperscalees/noiser/eggroll.py` (source of truth)
+- **Project Website:** https://eshyperscale.github.io/

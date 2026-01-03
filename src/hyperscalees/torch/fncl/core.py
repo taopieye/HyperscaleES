@@ -8,54 +8,7 @@ CORE CONCEPT:
     ES gradient estimation with O(r(m+n)) memory instead of O(m×n) per layer.
 
 This module contains the core EGGROLL primitives and Dict-based API.
-For experiments and examples, see eggroll_fncl.py.
-
-================================================================================
-DICT-BASED API (recommended)
-================================================================================
-
-    # 1. Initialize params as a dict
-    params = {
-        'layer1.weight': torch.randn(256, 4, device="cuda") * 0.1,
-        'layer1.bias': torch.zeros(256, device="cuda"),
-        'layer2.weight': torch.randn(2, 256, device="cuda") * 0.1,
-        'layer2.bias': torch.zeros(2, device="cuda"),
-    }
-    
-    # 2. Get weight shapes for perturbation generation
-    shapes = get_weight_shapes(params)
-    
-    # 3. Training loop
-    for epoch in range(max_epochs):
-        perts = generate_perturbations(shapes, pop, rank, sigma, gen, dtype)
-        
-        # Forward pass
-        h = torch.relu(perturbed_forward(x, params['layer1.weight'], 
-                                         params['layer1.bias'], perts, 'layer1.weight'))
-        logits = perturbed_forward(h, params['layer2.weight'],
-                                   params['layer2.bias'], perts, 'layer2.weight')
-        
-        # ES update
-        f = normalize_fitnesses(fitness_fn(logits))
-        grads = compute_gradients(f, perts, pop)
-        update_params(params, grads, lr)
-
-================================================================================
-RAW PRIMITIVES API (maximum control)
-================================================================================
-
-    # Generate perturbations for each weight matrix
-    A1, _, B1 = generate_lowrank_perturbations(pop, 256, 4, rank, sigma, gen, dtype)
-    A2, _, B2 = generate_lowrank_perturbations(pop, 2, 256, rank, sigma, gen, dtype)
-    
-    # Forward pass using perturbed_linear
-    h = torch.relu(perturbed_linear(x, W1, b1, A1, B1))
-    logits = perturbed_linear(h, W2, b2, A2, B2)
-    
-    # ES gradient computation + update
-    f = normalize_fitnesses(fitnesses)
-    W1 = W1 + lr * compute_es_gradient(f, A1, B1, pop)
-    W2 = W2 + lr * compute_es_gradient(f, A2, B2, pop)
+For experiments and examples, see the README.
 """
 
 import torch
@@ -67,11 +20,15 @@ __all__ = [
     # Configuration
     "EggrollConfig",
     # Dict-Based API
+    "get_params_dict",
     "get_weight_shapes",
     "generate_perturbations",
     "compute_gradients",
     "update_params",
+    "eggroll_step",
     "perturbed_forward",
+    # Forward generation
+    "make_perturbed_forward_fn",
     # Raw Primitives API
     "generate_lowrank_perturbations",
     "perturbed_linear",
@@ -105,6 +62,54 @@ class EggrollConfig:
 # Dict-Based API
 # =============================================================================
 
+#########
+# SETUP #
+#########
+def get_params_dict(
+    module: torch.nn.Module,
+    device: str | torch.device = "cuda",
+    dtype: torch.dtype | None = None,
+) -> dict[str, torch.Tensor]:
+    """
+    Extract parameters from a PyTorch module into EGGROLL's dict format.
+    
+    Copies all parameters to the specified device and optionally casts dtype.
+    Parameter names follow PyTorch's naming convention (e.g., '0.weight', 'fc.bias').
+    
+    Args:
+        module: PyTorch module to extract parameters from
+        device: Device to place parameters on (default: "cuda")
+        dtype: Optional dtype to cast parameters to. If None, keeps original dtype.
+        
+    Returns:
+        Dict mapping parameter names to tensors (detached, on specified device)
+        
+    Example:
+        model = nn.Sequential(
+            nn.Linear(4, 256),
+            nn.Linear(256, 2),
+        )
+        params = get_params_dict(model)
+        # {'0.weight': tensor(...), '0.bias': tensor(...), 
+        #  '1.weight': tensor(...), '1.bias': tensor(...)}
+        
+        # Or with named modules:
+        model = nn.Sequential(OrderedDict([
+            ('hidden', nn.Linear(4, 256)),
+            ('output', nn.Linear(256, 2)),
+        ]))
+        params = get_params_dict(model)
+        # {'hidden.weight': ..., 'hidden.bias': ..., 'output.weight': ..., ...}
+    """
+    params = {}
+    for name, param in module.named_parameters():
+        tensor = param.detach().to(device)
+        if dtype is not None:
+            tensor = tensor.to(dtype)
+        params[name] = tensor
+    return params
+
+
 def get_weight_shapes(params: dict[str, torch.Tensor]) -> dict[str, tuple[int, int]]:
     """
     Extract shapes of weight tensors for perturbation generation.
@@ -135,7 +140,9 @@ def get_weight_shapes(params: dict[str, torch.Tensor]) -> dict[str, tuple[int, i
             shapes[name] = (out_ch, in_ch * k1 * k2)
     return shapes
 
-
+##########
+# UPDATE #
+##########
 def generate_perturbations(
     shapes: dict[str, tuple[int, int]],
     population_size: int,
@@ -213,6 +220,64 @@ def update_params(
     return params
 
 
+def eggroll_step(
+    params: dict[str, torch.Tensor],
+    fitnesses: torch.Tensor,
+    perts: dict[str, tuple[torch.Tensor, torch.Tensor]],
+    lr: float,
+    sigma: float,
+    config: EggrollConfig | None = None,
+) -> tuple[float, float]:
+    """
+    Perform one EGGROLL gradient step: normalize -> compute gradients -> update params.
+    
+    This is the recommended high-level API for the EGGROLL training loop.
+    It combines normalize_fitnesses, compute_gradients, and update_params into
+    a single call, and applies learning rate and sigma decay from config.
+    
+    Args:
+        params: Parameter dict to update in-place
+        fitnesses: Raw fitness values (will be normalized internally)
+        perts: Perturbations dict from generate_perturbations()
+        lr: Current learning rate
+        sigma: Current sigma (noise scale)
+        config: EggrollConfig with lr_decay and sigma_decay (optional, default no decay)
+        
+    Returns:
+        (new_lr, new_sigma) tuple with decayed values
+        
+    Example:
+        config = EggrollConfig(population_size=2048, rank=4, sigma=0.1, lr=0.1,
+                               lr_decay=0.999, sigma_decay=0.999)
+        current_lr, current_sigma = config.lr, config.sigma
+        
+        for epoch in range(max_epochs):
+            perts = generate_perturbations(shapes, config.population_size, config.rank, 
+                                           current_sigma, gen, config.dtype)
+            logits = forward(x, params, perts)
+            fitnesses = compute_fitness(logits)
+            current_lr, current_sigma = eggroll_step(
+                params, fitnesses, perts, current_lr, current_sigma, config
+            )
+    """
+    # Infer population size from perturbations
+    first_pert = next(iter(perts.values()))
+    population_size = first_pert[0].shape[0]
+    
+    # Core EGGROLL update
+    normalized = normalize_fitnesses(fitnesses)
+    grads = compute_gradients(normalized, perts, population_size)
+    update_params(params, grads, lr)
+    
+    # Apply decay from config (default: no decay)
+    lr_decay = config.lr_decay if config is not None else 1.0
+    sigma_decay = config.sigma_decay if config is not None else 1.0
+    return lr * lr_decay, sigma * sigma_decay
+
+###########
+# FORWARD #
+###########
+
 def perturbed_forward(
     x: torch.Tensor,
     weight: torch.Tensor,
@@ -238,6 +303,158 @@ def perturbed_forward(
         return perturbed_linear(x, weight, bias, A_scaled, B)
     else:
         return x @ weight.T + (bias if bias is not None else 0)
+
+
+def make_perturbed_forward_fn(
+    module: torch.nn.Module,
+    example_input: torch.Tensor | None = None,
+) -> tuple[callable, callable]:
+    """
+    Auto-generate perturbed forward and eval forward functions from a PyTorch module.
+    
+    Uses torch.fx to trace the module and replace nn.Linear layers with perturbed_forward.
+    Works for Sequential models and simple feedforward architectures. For complex models
+    with dynamic control flow, you may need to write the forward functions manually.
+    
+    Args:
+        module: PyTorch module to trace. Must be traceable by torch.fx.
+        example_input: Optional example input for tracing. Required for some modules.
+        
+    Returns:
+        (forward_fn, forward_eval_fn) tuple:
+        - forward_fn(x, params, perts) -> output with perturbations applied
+        - forward_eval_fn(x, params) -> output without perturbations (for inference)
+        
+    Example:
+        model = nn.Sequential(
+            nn.Linear(4, 256),
+            nn.Tanh(),
+            nn.Linear(256, 2),
+        )
+        forward, forward_eval = make_perturbed_forward_fn(model)
+        
+        # Training
+        params = get_params_dict(model)
+        shapes = get_weight_shapes(params)
+        perts = generate_perturbations(shapes, pop, rank, sigma, gen, dtype)
+        output = forward(x, params, perts)
+        
+        # Inference  
+        output = forward_eval(x, params)
+        
+    Limitations:
+        - Only supports nn.Linear layers (not Conv2d - use perturbed_conv2d manually)
+        - Module must be traceable by torch.fx (no dynamic control flow)
+        - Activation functions must be in torch.nn or torch.nn.functional
+    """
+    import torch.fx as fx
+    
+    # Get the structure: list of (name, module_type, weight_name, bias_name)
+    linear_layers = []
+    for name, submodule in module.named_modules():
+        if isinstance(submodule, torch.nn.Linear):
+            weight_name = f"{name}.weight" if name else "weight"
+            bias_name = f"{name}.bias" if name else "bias"
+            has_bias = submodule.bias is not None
+            linear_layers.append((name, weight_name, bias_name, has_bias))
+    
+    # Trace the module to get computation graph
+    try:
+        traced = fx.symbolic_trace(module)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to trace module with torch.fx: {e}\n"
+            "For modules with dynamic control flow, write forward functions manually."
+        )
+    
+    # Build the forward functions by interpreting the traced graph
+    def forward_fn(x: torch.Tensor, params: dict, perts: dict) -> torch.Tensor:
+        """Forward with ES perturbations applied."""
+        env = {'x': x}
+        
+        for node in traced.graph.nodes:
+            if node.op == 'placeholder':
+                # Input node - already in env as 'x'
+                env[node.name] = x
+            elif node.op == 'get_attr':
+                # Skip - we use params dict instead
+                pass
+            elif node.op == 'call_module':
+                # Get the submodule
+                submodule = traced.get_submodule(node.target)
+                inp = env[node.args[0].name]
+                
+                if isinstance(submodule, torch.nn.Linear):
+                    # Replace with perturbed_forward
+                    weight_name = f"{node.target}.weight"
+                    bias_name = f"{node.target}.bias"
+                    weight = params[weight_name]
+                    bias = params.get(bias_name)
+                    env[node.name] = perturbed_forward(inp, weight, bias, perts, weight_name)
+                else:
+                    # Non-linear modules (activations, etc.) - apply directly
+                    env[node.name] = submodule(inp)
+            elif node.op == 'call_function':
+                # Functions like torch.relu, F.tanh, etc.
+                args = tuple(env.get(a.name, a) if isinstance(a, fx.Node) else a for a in node.args)
+                kwargs = {k: env.get(v.name, v) if isinstance(v, fx.Node) else v for k, v in node.kwargs.items()}
+                env[node.name] = node.target(*args, **kwargs)
+            elif node.op == 'call_method':
+                # Methods like .view(), .reshape(), etc.
+                self_arg = env[node.args[0].name]
+                args = tuple(env.get(a.name, a) if isinstance(a, fx.Node) else a for a in node.args[1:])
+                kwargs = {k: env.get(v.name, v) if isinstance(v, fx.Node) else v for k, v in node.kwargs.items()}
+                env[node.name] = getattr(self_arg, node.target)(*args, **kwargs)
+            elif node.op == 'output':
+                # Return node
+                if isinstance(node.args[0], fx.Node):
+                    return env[node.args[0].name]
+                return node.args[0]
+        
+        raise RuntimeError("No output node found in traced graph")
+    
+    def forward_eval_fn(x: torch.Tensor, params: dict) -> torch.Tensor:
+        """Forward without perturbations (for inference/evaluation)."""
+        env = {'x': x}
+        
+        for node in traced.graph.nodes:
+            if node.op == 'placeholder':
+                env[node.name] = x
+            elif node.op == 'get_attr':
+                pass
+            elif node.op == 'call_module':
+                submodule = traced.get_submodule(node.target)
+                inp = env[node.args[0].name]
+                
+                if isinstance(submodule, torch.nn.Linear):
+                    weight_name = f"{node.target}.weight"
+                    bias_name = f"{node.target}.bias"
+                    weight = params[weight_name]
+                    bias = params.get(bias_name)
+                    # Standard linear: x @ W.T + b
+                    out = inp @ weight.T
+                    if bias is not None:
+                        out = out + bias
+                    env[node.name] = out
+                else:
+                    env[node.name] = submodule(inp)
+            elif node.op == 'call_function':
+                args = tuple(env.get(a.name, a) if isinstance(a, fx.Node) else a for a in node.args)
+                kwargs = {k: env.get(v.name, v) if isinstance(v, fx.Node) else v for k, v in node.kwargs.items()}
+                env[node.name] = node.target(*args, **kwargs)
+            elif node.op == 'call_method':
+                self_arg = env[node.args[0].name]
+                args = tuple(env.get(a.name, a) if isinstance(a, fx.Node) else a for a in node.args[1:])
+                kwargs = {k: env.get(v.name, v) if isinstance(v, fx.Node) else v for k, v in node.kwargs.items()}
+                env[node.name] = getattr(self_arg, node.target)(*args, **kwargs)
+            elif node.op == 'output':
+                if isinstance(node.args[0], fx.Node):
+                    return env[node.args[0].name]
+                return node.args[0]
+        
+        raise RuntimeError("No output node found in traced graph")
+    
+    return forward_fn, forward_eval_fn
 
 
 # =============================================================================
@@ -341,24 +558,18 @@ def perturbed_linear(x, W, b, A_scaled, B):
 
 
 @torch.compile
-def compute_weight_perturbation(A_scaled: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+def normalize_fitnesses(fitnesses, eps=1e-8):
     """
-    Materialize the full weight perturbation matrix from low-rank factors.
-    
-    WARNING: This explicitly computes A @ B.T, which is O(m*n) memory.
-    Only use when materialization is unavoidable (e.g., conv2d via grouped conv).
-    
-    For linear layers, use perturbed_linear() instead - it computes:
-        x @ B @ A.T  (two rank-r matmuls, never materializes m×n matrix)
+    Normalize fitness scores to zero mean, unit variance.
     
     Args:
-        A_scaled: (population, out_dim, rank) - scaled A factors  
-        B: (population, in_dim, rank) - B factors
+        fitnesses: (population,) - raw fitness scores
+        eps: small constant for numerical stability
         
     Returns:
-        delta_W: (population, out_dim, in_dim) - materialized weight perturbation
+        normalized: (population,) - normalized fitness scores
     """
-    return torch.einsum('pir,pjr->pij', A_scaled, B)
+    return (fitnesses - fitnesses.mean()) / (fitnesses.std() + eps)
 
 
 @torch.compile
@@ -378,18 +589,3 @@ def compute_es_gradient(fitnesses, A_scaled, B, population_size):
     sqrt_N = math.sqrt(population_size)
     f = fitnesses[:, None, None]
     return torch.einsum('nir,njr->ij', f * A_scaled, B) / sqrt_N
-
-
-@torch.compile
-def normalize_fitnesses(fitnesses, eps=1e-8):
-    """
-    Normalize fitness scores to zero mean, unit variance.
-    
-    Args:
-        fitnesses: (population,) - raw fitness scores
-        eps: small constant for numerical stability
-        
-    Returns:
-        normalized: (population,) - normalized fitness scores
-    """
-    return (fitnesses - fitnesses.mean()) / (fitnesses.std() + eps)

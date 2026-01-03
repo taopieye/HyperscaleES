@@ -6,9 +6,9 @@ This file contains runnable experiments demonstrating EGGROLL on RL and SL tasks
 For API documentation, see README.md and core.py.
 
 Experiments:
-    CartPole (RL)       - main()
-    MNIST MLP (SL)      - main_mnist()
-    MNIST CNN (SL)      - main_mnist_cnn()
+    CartPole (RL)       - cartpole()
+    MNIST MLP (SL)      - mnist_mlp()
+    MNIST CNN (SL)      - mnist_cnn()
     
 Run:
     python -m hyperscalees.torch.fncl.recipes --experiment cartpole
@@ -17,6 +17,7 @@ Run:
 """
 
 import torch
+import torch.nn as nn
 import gymnasium as gym
 import time
 import math
@@ -24,36 +25,13 @@ import numpy as np
 from rich.console import Console
 from rich.table import Table
 
-# Import core EGGROLL functions
-try:
-    from .core import (
-        EggrollConfig,
-        get_weight_shapes, generate_perturbations, compute_gradients,
-        update_params, perturbed_forward, generate_lowrank_perturbations,
-        perturbed_linear, apply_lowrank_perturbation, compute_weight_perturbation,
-        compute_es_gradient, normalize_fitnesses,
-    )
-except ImportError:
-    from core import (
-        EggrollConfig,
-        get_weight_shapes, generate_perturbations, compute_gradients,
-        update_params, perturbed_forward, generate_lowrank_perturbations,
-        perturbed_linear, apply_lowrank_perturbation, compute_weight_perturbation,
-        compute_es_gradient, normalize_fitnesses,
-    )
+from .core import (
+    EggrollConfig,
+    get_params_dict, get_weight_shapes, generate_perturbations,
+    perturbed_forward, make_perturbed_forward_fn, eggroll_step,
+)
 
 console = Console()
-
-__all__ = [
-    # Core (re-exported from core.py)
-    "EggrollConfig", "get_weight_shapes", "generate_perturbations", "compute_gradients",
-    "update_params", "perturbed_forward", "generate_lowrank_perturbations",
-    "perturbed_linear", "apply_lowrank_perturbation", "compute_es_gradient", "normalize_fitnesses",
-    # Helpers
-    "init_mlp_params", "count_params", "count_params_dict", "load_mnist_flat", "load_mnist_2d",
-    # GPU Utils
-    "get_gpu_stats", "print_gpu_stats", "reset_gpu_stats",
-]
 
 # =============================================================================
 # GPU Utilities
@@ -175,6 +153,26 @@ def compute_classification_fitness(logits, labels):
     nll = -log_probs.gather(dim=-1, index=labels_exp.unsqueeze(-1)).squeeze(-1)
     return -nll.mean(dim=-1)
 
+@torch.compile
+def compute_weight_perturbation(A_scaled: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    """
+    Materialize the full weight perturbation matrix from low-rank factors.
+    
+    WARNING: This explicitly computes A @ B.T, which is O(m*n) memory.
+    Only use when materialization is unavoidable (e.g., conv2d via grouped conv).
+    
+    For linear layers, use perturbed_linear() instead - it computes:
+        x @ B @ A.T  (two rank-r matmuls, never materializes m×n matrix)
+    
+    Args:
+        A_scaled: (population, out_dim, rank) - scaled A factors  
+        B: (population, in_dim, rank) - B factors
+        
+    Returns:
+        delta_W: (population, out_dim, in_dim) - materialized weight perturbation
+    """
+    return torch.einsum('pir,pjr->pij', A_scaled, B)
+
 
 def perturbed_conv2d(x, weight, perts, weight_name, padding=1):
     """
@@ -210,17 +208,6 @@ def perturbed_conv2d(x, weight, perts, weight_name, padding=1):
     return out_grouped.reshape(batch_size, pop_size, C_out, H_out, W_out).permute(1, 0, 2, 3, 4)
 
 
-def init_mlp_params(input_dim, hidden_dim, output_dim, dtype=torch.float32, scale=None):
-    """Initialize 2-layer MLP parameters on CUDA."""
-    W1 = torch.randn(hidden_dim, input_dim, device="cuda", dtype=dtype)
-    W1 = W1 / math.sqrt(input_dim) if scale is None else W1 * scale
-    b1 = torch.zeros(hidden_dim, device="cuda", dtype=dtype)
-    W2 = torch.randn(output_dim, hidden_dim, device="cuda", dtype=dtype)
-    W2 = W2 / math.sqrt(hidden_dim) if scale is None else W2 * scale
-    b2 = torch.zeros(output_dim, device="cuda", dtype=dtype)
-    return W1, b1, W2, b2
-
-
 def count_params(*tensors):
     """Count total number of parameters in tensors."""
     return sum(t.numel() for t in tensors)
@@ -235,7 +222,7 @@ def count_params_dict(params):
 # EXPERIMENT: CartPole (RL)
 # =============================================================================
 
-def main(config: EggrollConfig = None):
+def cartpole(config: EggrollConfig = None):
     """CartPole-v1 with EGGROLL. Architecture: 4 -> 256 (tanh) -> 2."""
     if config is None:
         config = EggrollConfig(
@@ -247,30 +234,27 @@ def main(config: EggrollConfig = None):
     torch.manual_seed(config.seed)
     reset_gpu_stats()
     
-    # Model: 2-layer MLP
-    input_dim, hidden_dim, output_dim = 4, 256, 2
-    params = {
-        'layer1.weight': torch.randn(hidden_dim, input_dim, device="cuda", dtype=config.dtype) * 0.1,
-        'layer1.bias': torch.zeros(hidden_dim, device="cuda", dtype=config.dtype),
-        'layer2.weight': torch.randn(output_dim, hidden_dim, device="cuda", dtype=config.dtype) * 0.1,
-        'layer2.bias': torch.zeros(output_dim, device="cuda", dtype=config.dtype),
-    }
+    # Model: 2-layer MLP using standard PyTorch
+    model = nn.Sequential(
+        nn.Linear(4, 256),
+        nn.Tanh(),
+        nn.Linear(256, 2),
+    )
+    # Initialize with small weights
+    for m in model.modules():
+        if isinstance(m, nn.Linear):
+            nn.init.normal_(m.weight, std=0.1)
+            nn.init.zeros_(m.bias)
+    
+    # Convert to EGGROLL format
+    params = get_params_dict(model, dtype=config.dtype)
     shapes = get_weight_shapes(params)
+    forward, forward_eval = make_perturbed_forward_fn(model)
     n_params = count_params_dict(params)
-    
-    def forward(obs, params, perts):
-        h = torch.tanh(perturbed_forward(obs, params['layer1.weight'], 
-                                         params['layer1.bias'], perts, 'layer1.weight'))
-        return perturbed_forward(h, params['layer2.weight'], 
-                                 params['layer2.bias'], perts, 'layer2.weight')
-    
-    def forward_eval(obs, params):
-        h = torch.tanh(obs @ params['layer1.weight'].T + params['layer1.bias'])
-        return h @ params['layer2.weight'].T + params['layer2.bias']
     
     console.print(f"[bold]Torch EGGROLL - CartPole-v1[/bold]")
     console.print(f"Population: {config.population_size}, Rank: {config.rank}, Sigma: {config.sigma}, LR: {config.lr}")
-    console.print(f"Network: {input_dim} -> {hidden_dim} -> {output_dim} ({n_params:,} params)")
+    console.print(f"Network: 4 -> 256 -> 2 ({n_params:,} params)")
     print_gpu_stats("Init ")
     console.print()
     
@@ -313,12 +297,9 @@ def main(config: EggrollConfig = None):
         
         total_steps += steps_this_epoch
         
-        fitnesses = normalize_fitnesses(episode_returns)
-        grads = compute_gradients(fitnesses, perts, config.population_size)
-        update_params(params, grads, current_lr)
-        
-        current_lr *= config.lr_decay
-        current_sigma *= config.sigma_decay
+        current_lr, current_sigma = eggroll_step(
+            params, episode_returns, perts, current_lr, current_sigma, config
+        )
         
         epoch_time = time.perf_counter() - epoch_start
         elapsed = time.perf_counter() - start_time
@@ -385,7 +366,7 @@ def main(config: EggrollConfig = None):
 # EXPERIMENT: MNIST MLP (Supervised Learning)
 # =============================================================================
 
-def main_mnist(config: EggrollConfig = None):
+def mnist_mlp(config: EggrollConfig = None):
     """MNIST classification with EGGROLL. Architecture: 784 -> 256 (tanh) -> 10."""
     if config is None:
         config = EggrollConfig(
@@ -397,30 +378,27 @@ def main_mnist(config: EggrollConfig = None):
     torch.manual_seed(config.seed)
     reset_gpu_stats()
     
-    # Model: 2-layer MLP
-    input_dim, hidden_dim, output_dim = 784, 256, 10
-    params = {
-        'layer1.weight': torch.randn(hidden_dim, input_dim, device="cuda", dtype=config.dtype) * 0.1,
-        'layer1.bias': torch.zeros(hidden_dim, device="cuda", dtype=config.dtype),
-        'layer2.weight': torch.randn(output_dim, hidden_dim, device="cuda", dtype=config.dtype) * 0.1,
-        'layer2.bias': torch.zeros(output_dim, device="cuda", dtype=config.dtype),
-    }
+    # Model: 2-layer MLP using standard PyTorch
+    model = nn.Sequential(
+        nn.Linear(784, 256),
+        nn.Tanh(),
+        nn.Linear(256, 10),
+    )
+    # Initialize with small weights
+    for m in model.modules():
+        if isinstance(m, nn.Linear):
+            nn.init.normal_(m.weight, std=0.1)
+            nn.init.zeros_(m.bias)
+    
+    # Convert to EGGROLL format
+    params = get_params_dict(model, dtype=config.dtype)
     shapes = get_weight_shapes(params)
+    forward, forward_eval = make_perturbed_forward_fn(model)
     n_params = count_params_dict(params)
-    
-    def forward(x, params, perts):
-        h = torch.tanh(perturbed_forward(x, params['layer1.weight'], 
-                                         params['layer1.bias'], perts, 'layer1.weight'))
-        return perturbed_forward(h, params['layer2.weight'], 
-                                 params['layer2.bias'], perts, 'layer2.weight')
-    
-    def forward_eval(x, params):
-        h = torch.tanh(x @ params['layer1.weight'].T + params['layer1.bias'])
-        return h @ params['layer2.weight'].T + params['layer2.bias']
     
     console.print(f"\n[bold]MNIST MLP - Torch EGGROLL[/bold]")
     console.print(f"Population: {config.population_size}, Rank: {config.rank}, Sigma: {config.sigma}, LR: {config.lr}")
-    console.print(f"Network: {input_dim} -> {hidden_dim} -> {output_dim} ({n_params:,} params)")
+    console.print(f"Network: 784 -> 256 -> 10 ({n_params:,} params)")
     print_gpu_stats("Init ")
     console.print()
     
@@ -444,10 +422,10 @@ def main_mnist(config: EggrollConfig = None):
         
         x = batch_imgs.unsqueeze(0).expand(config.population_size, -1, -1)
         logits = forward(x, params, perts)
-        fitnesses = normalize_fitnesses(compute_classification_fitness(logits, batch_labels))
-        grads = compute_gradients(fitnesses, perts, config.population_size)
-        update_params(params, grads, current_lr)
-        current_sigma *= config.sigma_decay
+        fitnesses = compute_classification_fitness(logits, batch_labels)
+        current_lr, current_sigma = eggroll_step(
+            params, fitnesses, perts, current_lr, current_sigma, config
+        )
         
         with torch.no_grad():
             test_logits = forward_eval(test_imgs, params)
@@ -467,7 +445,7 @@ def main_mnist(config: EggrollConfig = None):
 # EXPERIMENT: MNIST CNN
 # =============================================================================
 
-def main_mnist_cnn(config: EggrollConfig = None):
+def mnist_cnn(config: EggrollConfig = None):
     """MNIST CNN with EGGROLL (perturbs conv + FC layers)."""
     if config is None:
         config = EggrollConfig(
@@ -537,12 +515,10 @@ def main_mnist_cnn(config: EggrollConfig = None):
                                        current_sigma, gen, config.dtype)
         
         logits = forward(batch_imgs, params, perts)
-        fitnesses = normalize_fitnesses(compute_classification_fitness(logits, batch_labels))
-        grads = compute_gradients(fitnesses, perts, config.population_size)
-        update_params(params, grads, current_lr)
-        
-        current_lr *= config.lr_decay
-        current_sigma *= config.sigma_decay
+        fitnesses = compute_classification_fitness(logits, batch_labels)
+        current_lr, current_sigma = eggroll_step(
+            params, fitnesses, perts, current_lr, current_sigma, config
+        )
         
         with torch.no_grad():
             test_logits = forward_eval(test_imgs, params)
@@ -560,7 +536,7 @@ def main_mnist_cnn(config: EggrollConfig = None):
 # Benchmarking
 # =============================================================================
 
-def main_hyperscale():
+def hyperscale():
     """Find maximum population size before OOM."""
     dtype = torch.float32
     
@@ -652,17 +628,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     if args.experiment == "cartpole":
-        main()
+        cartpole()
     elif args.experiment == "mnist":
-        main_mnist()
+        mnist_mlp()
     elif args.experiment == "mnist_cnn":
-        main_mnist_cnn()
+        mnist_cnn()
     elif args.experiment == "hyperscale":
-        main_hyperscale()
+        hyperscale()
     elif args.experiment == "all":
         console.print("[bold cyan]═══ CartPole ═══[/bold cyan]")
-        main()
+        cartpole()
         console.print("\n[bold cyan]═══ MNIST MLP ═══[/bold cyan]")
-        main_mnist()
+        mnist_mlp()
         console.print("\n[bold cyan]═══ MNIST CNN ═══[/bold cyan]")
-        main_mnist_cnn()
+        mnist_cnn()

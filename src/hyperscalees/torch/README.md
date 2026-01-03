@@ -252,7 +252,7 @@ from hyperscalees.torch.recipes import (
     load_mnist_flat, compute_classification_fitness
 )
 
-# ============ CONFIG (proven to work) ============
+# ============ CONFIG ============
 config = EggrollConfig(
     population_size=4096,  # Larger population for SL
     rank=4,
@@ -269,7 +269,7 @@ config = EggrollConfig(
 train_imgs, train_labels, test_imgs, test_labels = load_mnist_flat(config.dtype)
 # train_imgs: (60000, 784), test_imgs: (10000, 784)
 
-# ============ MODEL DEFINITION (standard PyTorch!) ============
+# ============ MODEL DEFINITION ============
 model = nn.Sequential(
     nn.Linear(784, 256),
     nn.Tanh(),
@@ -464,12 +464,6 @@ For when you need fine-grained control over each layer.
 | `lr_decay` | 1.0 | Optional LR decay. Usually not needed for ES. |
 | `batch_size` | 256 | Mini-batch size for supervised learning. 64-256 works well. |
 
-### Recommended Settings
-
-| Task | population | rank | sigma | lr | Notes |
-|------|-----------|------|-------|-----|-------|
-| Custom RL | 2048-4096 | 4 | 0.1-0.3 | 0.05-0.1 | Start high sigma, decay |
-
 ---
 
 ## The Math (Optional)
@@ -535,7 +529,6 @@ The update is still high-rank: averaging $N$ rank-$r$ matrices gives rank $\min(
 
 - **torch.compile:** All forward passes are JIT-compiled for performance
 - **Throughput:** 1M+ steps/sec on CartPole (RTX 4090)
-- **Grouped conv:** `perturbed_conv2d` uses grouped convolution for efficient batched CNN training
 - **Memory:** Population 4096 + batch 256 uses ~1-2GB VRAM for MNIST
 - **TF32 enabled:** Automatic TensorFloat32 for faster matmul on Ampere+ GPUs
 
@@ -607,15 +600,12 @@ recipes.py                     # Experiments & recipes
     ├── cartpole()
     ├── mnist_mlp()
     └── mnist_cnn()
-
-# Reference: JAX implementation at src/hyperscalees/noiser/eggroll.py
-# Paper: EGGROLL.pdf at project root
 ```
 
 ---
 
 ## References
 
-- **Paper:** Sarkar et al., "Evolution Strategies at the Hyperscale" — see `EGGROLL.pdf` at project root
-- **JAX Reference Implementation:** `src/hyperscalees/noiser/eggroll.py` (source of truth)
+- **Paper:** Sarkar et al., "Evolution Strategies at the Hyperscale"
+- **JAX Reference Implementation:** `src/hyperscalees/noiser/eggroll.py`
 - **Project Website:** https://eshyperscale.github.io/

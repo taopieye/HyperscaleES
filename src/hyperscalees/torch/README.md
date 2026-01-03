@@ -86,7 +86,7 @@ model = nn.Sequential(
 # 2. Auto-convert to EGGROLL format
 params = get_params_dict(model)                      # Extract params dict
 shapes = get_weight_shapes(params)                   # Get shapes for perturbation gen
-forward, forward_eval = make_perturbed_forward_fn(model)  # Auto-gen forward functions!
+forward, forward_eval = make_perturbed_forward_fn(model)  # Auto-gen forward functions
 
 # 3. Training loop
 config = EggrollConfig(population_size=2048, rank=4, sigma=0.1, lr=0.1,
@@ -422,7 +422,7 @@ For when you need fine-grained control over each layer.
 
 | Param | Default | Effect |
 |-------|---------|--------|
-| `population_size` | 2048 | More = smoother gradients, slower per-step. The paper uses up to 262,144 for pretraining! |
+| `population_size` | 2048 | More = smoother gradients, slower per-step. The paper uses up to 262,144 for pretraining. |
 | `rank` | 4 | Low-rank dimension. Higher = more expressive perturbations. Theory shows $O(1/r)$ convergence. |
 | `sigma` | 0.1-0.2 | Perturbation scale (before $1/\sqrt{r}$ normalization). Too high = chaotic, too low = stuck. |
 | `lr` | 0.1 | Learning rate. ES is relatively robust to LR—0.1 is a good default. |
@@ -547,7 +547,6 @@ core.py                        # Core EGGROLL implementation
     ├── generate_lowrank_perturbations  # Antithetic A, B factors
     ├── perturbed_linear                # Core: base + low-rank perturbation
     ├── apply_lowrank_perturbation      # Just x @ B @ A.T
-    ├── compute_weight_perturbation     # Materialize A @ B.T (for conv only!)
     ├── compute_es_gradient             # Single-weight ES gradient
     └── normalize_fitnesses             # Zero-mean, unit-variance
 
